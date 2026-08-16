@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+npm-debug.log
+
+# Output
+output/
+cards.json
+
+# Environment
+.env
+.env.local
+
+# Browser
+.chromium/
+chrome-data/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

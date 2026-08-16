@@ -1,0 +1,18 @@
+{
+  "name": "scraper-toolkit",
+  "version": "1.0.0",
+  "description": "FC26 Market Analysis Multi-Source Scraper",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js Mbappe"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.4.5",
+    "puppeteer": "^22.15.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

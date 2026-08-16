@@ -1,0 +1,12 @@
+{
+  "players": [
+    {
+      "playerName": "Kylian Mbappé",
+      "searchName": "Mbappe",
+      "futbin": { "id": "40", "slug": "kylian-mbappe" },
+      "futgg": { "id": "231747", "slug": "kylian-mbappe" },
+      "futwiz": { "id": "33", "slug": "kylian-mbappe" },
+      "futnext": { "id": "231747", "slug": "kylian-mbappé" }
+    }
+  ]
+}
