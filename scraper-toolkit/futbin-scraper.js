@@ -1,24 +1,22 @@
 /**
- * FUTBIN SCRAPER
+ * FUTBIN SCRAPER (v3 - top 5 lowest prices)
  *
- * Confirmed selectors (via DevTools element picker, Aug 2026):
- * - BIN price:       .price.inline-with-icon.lowest-price-1
- * - Price range/upd: .price-box-full-width-xxs-column
- * - Market grid:     .market-grid.platform-pc-only (avg BIN, cheapest, EA avg)
- *
- * Prices are client-side rendered - Puppeteer required (confirmed: static
- * fetch returns "0 Coin" / "No Data Available" everywhere).
+ * Returns up to 5 lowest listed prices (not just the single lowest),
+ * taken from the main price display + the "lowest prices" side list.
  */
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-async function scrape(playerName, futbinId, slug) {
-  console.log(`  📊 FUTBIN: Scraping "${playerName}" (id=${futbinId})...`);
+async function scrape(playerName, rawUrl) {
+  console.log(`  📊 FUTBIN: Scraping "${playerName}"...`);
 
   let browser;
   try {
+    let url = rawUrl.replace(/\/+$/, '');
+    if (!url.endsWith('/market')) url += '/market';
+
     browser = await puppeteer.launch({
       headless: process.env.HEADLESS !== 'false',
       executablePath: process.env.CHROME_PATH || undefined,
@@ -30,10 +28,7 @@ async function scrape(playerName, futbinId, slug) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    const url = `https://www.futbin.com/26/player/${futbinId}/${slug}/market`;
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
-
-    // Wait for the price to actually hydrate (client-side render)
     await page.waitForSelector('.price.inline-with-icon.lowest-price-1', { timeout: 15000 });
 
     const data = await page.evaluate(() => {
@@ -46,6 +41,22 @@ async function scrape(playerName, futbinId, slug) {
 
       const lowestPrice = num(document.querySelector('.price.inline-with-icon.lowest-price-1')?.textContent);
 
+      // Grab up to 5 lowest prices: use leaf elements only (no children) to
+      // avoid double-counting parent+child text, then prepend the main
+      // price if it's not already the first entry.
+      function extractPrices(container) {
+        if (!container) return [];
+        const leafEls = Array.from(container.querySelectorAll('*')).filter(el => el.children.length === 0);
+        const candidates = leafEls.length ? leafEls : Array.from(container.children);
+        return candidates.map(el => num(el.textContent)).filter(n => n !== null);
+      }
+
+      let lowestPrices = extractPrices(document.querySelector('.lowest-prices-wrapper'));
+      if (lowestPrice !== null && lowestPrices[0] !== lowestPrice) {
+        lowestPrices.unshift(lowestPrice);
+      }
+      lowestPrices = lowestPrices.slice(0, 5);
+
       const priceBoxText = clean(document.querySelector('.price-box-full-width-xxs-column')?.textContent) || '';
       const rangeMatch = priceBoxText.match(/([\d,]+)\s*-\s*([\d,]+)/);
       const priceRange = rangeMatch ? { min: num(rangeMatch[1]), max: num(rangeMatch[2]) } : null;
@@ -57,12 +68,12 @@ async function scrape(playerName, futbinId, slug) {
       const cheapestMatch = marketGridText.match(/Cheapest Sale[^\d]*([\d,]+)/i);
       const eaAvgMatch = marketGridText.match(/EA Avg\. Price\s*([\d,]+)/i);
 
-      // Trend text lives near the top of the price panel, format: "29.69% (+19K)"
       const bodyText = document.body.innerText;
       const trendMatch = bodyText.match(/Trend:\s*([\-\d.]+%\s*\([^)]+\))/i);
 
       return {
         lowestPrice,
+        lowestPrices,
         priceRange,
         priceUpdated,
         averageBin: avgBinMatch ? num(avgBinMatch[1]) : null,
@@ -74,7 +85,6 @@ async function scrape(playerName, futbinId, slug) {
 
     const result = {
       source: 'FUTBIN',
-      futbinId,
       ...data,
       url,
       timestamp: new Date().toISOString(),

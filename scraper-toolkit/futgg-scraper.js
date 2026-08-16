@@ -1,24 +1,19 @@
 /**
- * FUT.GG SCRAPER
+ * FUT.GG SCRAPER (v2 - URL-based)
  *
- * Static player attributes (rating, position, club, nation, player ID) ARE
- * present in server-rendered HTML - confirmed via direct fetch.
- * The BIN price is NOT in the static HTML ("PR" placeholder) - it hydrates
- * client-side, so Puppeteer is needed for price. We grab everything in one
- * pass to avoid a second request.
- *
- * "Lowest BIN" section appears BEFORE "Price Momentum" in DOM order, so the
- * first span.tabular-nums after the "Lowest BIN" heading is the price -
- * text-pattern matching is used instead of raw class chains since Tailwind
- * utility classes are not unique/stable identifiers.
+ * FIX: "Lowest BIN" price is picked by finding the exact text node
+ * "Lowest BIN" first, then taking the NEXT tabular-nums span after it in
+ * DOM order - NOT just the first tabular-nums on the page. There are
+ * other tabular-nums elements earlier in the page (percentage badges
+ * near the player card) that were being picked up incorrectly before.
  */
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-async function scrape(playerName, futggId, slug) {
-  console.log(`  📊 FUT.GG: Scraping "${playerName}" (id=${futggId})...`);
+async function scrape(playerName, url) {
+  console.log(`  📊 FUT.GG: Scraping "${playerName}"...`);
 
   let browser;
   try {
@@ -33,7 +28,6 @@ async function scrape(playerName, futggId, slug) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    const url = `https://www.fut.gg/players/${futggId}-${slug}/26-${futggId}/`;
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
 
     await page.waitForFunction(
@@ -48,10 +42,27 @@ async function scrape(playerName, futggId, slug) {
         return isNaN(n) ? null : n;
       };
 
-      // Lowest BIN = first tabular-nums span in DOM order (appears before
-      // the Price Momentum section which has its own tabular-nums spans)
-      const tabularSpans = Array.from(document.querySelectorAll('span.tabular-nums'));
-      const lowestBin = tabularSpans.length ? num(tabularSpans[0].textContent) : null;
+      // Find the leaf element whose exact text is "Lowest BIN", then find
+      // the first span.tabular-nums that comes AFTER it in document order.
+      function findValueAfterLabel(labelText) {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        let foundLabel = false;
+        let node;
+        while ((node = walker.nextNode())) {
+          if (!foundLabel) {
+            if (node.children.length === 0 && node.textContent.trim() === labelText) {
+              foundLabel = true;
+            }
+            continue;
+          }
+          if (node.matches && node.matches('span.tabular-nums')) {
+            return node.textContent;
+          }
+        }
+        return null;
+      }
+
+      const lowestBin = num(findValueAfterLabel('Lowest BIN'));
 
       const bodyText = document.body.innerText;
 

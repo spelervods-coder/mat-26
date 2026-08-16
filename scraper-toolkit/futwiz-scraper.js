@@ -1,19 +1,13 @@
 /**
- * FUTWIZ SCRAPER
- *
- * BIN price and Card ID confirmed via DevTools element picker.
- * Using text-pattern matching for Card ID (more stable than the raw
- * Tailwind class chain, which is not a unique/semantic identifier).
- * BIN price color class (text-cyan-300) is a design-system token and
- * reasonably stable, used with an attribute-contains selector as fallback-safe.
+ * FUTWIZ SCRAPER (v2 - URL-based)
  */
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-async function scrape(playerName, futwizId, slug) {
-  console.log(`  📊 FUTWIZ: Scraping "${playerName}" (id=${futwizId})...`);
+async function scrape(playerName, url) {
+  console.log(`  📊 FUTWIZ: Scraping "${playerName}"...`);
 
   let browser;
   try {
@@ -28,9 +22,7 @@ async function scrape(playerName, futwizId, slug) {
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    const url = `https://www.futwiz.com/fc26/player/${slug}/${futwizId}`;
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
-
     await page.waitForSelector('[class*="text-cyan-300"]', { timeout: 15000 });
 
     const data = await page.evaluate(() => {
@@ -46,21 +38,20 @@ async function scrape(playerName, futwizId, slug) {
       const bodyText = document.body.innerText;
       const cardIdMatch = bodyText.match(/Card ID\s*\n?\s*([A-Za-z0-9]+)/i);
       const playerIdMatch = bodyText.match(/Player ID\s*\n?\s*([A-Za-z0-9]+)/i);
-      const addedMatch = bodyText.match(/Added\s*\n?\s*([A-Za-z]+ \d{1,2},?\s*\d{4}[^\\n]*)/i);
+      const addedMatch = bodyText.match(/Added\s*\n?\s*([A-Za-z]+ \d{1,2},?\s*\d{4}[^\n]*)/i);
       const likesMatch = bodyText.match(/(\d+)%?\s*Like/i);
 
       return {
         marketValue,
         cardId: cardIdMatch ? cardIdMatch[1] : null,
         playerId: playerIdMatch ? playerIdMatch[1] : null,
-        added: addedMatch ? addedMatch[1].trim() : null,
+        added: addedMatch ? addedMatch[1].trim().split('\n')[0] : null,
         likesPercent: likesMatch ? parseInt(likesMatch[1], 10) : null,
       };
     });
 
     const result = {
       source: 'FUTWIZ',
-      futwizId,
       ...data,
       url,
       timestamp: new Date().toISOString(),

@@ -1,17 +1,16 @@
 /**
- * FUTNEXT SCRAPER
+ * FUTNEXT SCRAPER (v2 - URL-based)
  *
- * Using text-pattern matching for Current Cheapest / Lowest (24H) /
- * Average (24H) / 24h change - the raw Tailwind class chains shown in
- * DevTools are long utility combinations, not stable identifiers.
+ * URL is used AS-IS (no re-encoding) - if pasted straight from the
+ * browser address bar it is already percent-encoded correctly.
  */
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-async function scrape(playerName, futnextId, slug) {
-  console.log(`  📊 FutNext: Scraping "${playerName}" (id=${futnextId})...`);
+async function scrape(playerName, url) {
+  console.log(`  📊 FutNext: Scraping "${playerName}"...`);
 
   let browser;
   try {
@@ -26,11 +25,7 @@ async function scrape(playerName, futnextId, slug) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // slug should be the player name, NOT pre-encoded - encodeURIComponent
-    // handles accented characters (é etc.) correctly here
-    const url = `https://www.futnext.com/player/${encodeURIComponent(slug)}/${futnextId}`;
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
-
     await page.waitForFunction(
       () => document.body.innerText.includes('Lowest'),
       { timeout: 15000 }
@@ -45,7 +40,7 @@ async function scrape(playerName, futnextId, slug) {
 
       const bodyText = document.body.innerText;
 
-      const cheapestMatch = bodyText.match(/^([\d,]+)\s*$/m); // top-of-page price display
+      const cheapestMatch = bodyText.match(/^([\d,]+)\s*$/m);
       const lowest24hMatch = bodyText.match(/Lowest\s*\(24H\)\s*\n?\s*([\d,]+)/i);
       const avg24hMatch = bodyText.match(/Average\s*\(24H\)\s*\n?\s*([\d,]+)/i);
       const changeMatch = bodyText.match(/([\-\+]?[\d,]+)\s*\(([\-\d.]+)%\)/);
@@ -60,7 +55,6 @@ async function scrape(playerName, futnextId, slug) {
 
     const result = {
       source: 'FutNext',
-      futnextId,
       ...data,
       url,
       timestamp: new Date().toISOString(),
