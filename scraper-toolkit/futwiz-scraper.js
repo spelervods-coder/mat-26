@@ -1,5 +1,10 @@
 /**
- * FUTWIZ SCRAPER (v2 - URL-based)
+ * FUTWIZ SCRAPER (v4)
+ *
+ * NEW: cardVersion - verified via direct fetch, two sources agree:
+ * - document.title: "Kylian Mbappe EA FC26 Gold Rare - rated 91"
+ * - explicit "Version" field in the attribute list
+ * Title regex used as primary (simpler), Version-field regex as fallback.
  */
 
 const puppeteer = require('puppeteer-extra');
@@ -41,22 +46,21 @@ async function scrape(playerName, url) {
       const addedMatch = bodyText.match(/Added\s*\n?\s*([A-Za-z]+ \d{1,2},?\s*\d{4}[^\n]*)/i);
       const likesMatch = bodyText.match(/(\d+)%?\s*Like/i);
 
+      const titleMatch = document.title.match(/EA FC\d+\s+(.+?)\s*-\s*rated/i);
+      const versionFieldMatch = bodyText.match(/Version\s*\n+\s*([A-Za-z][A-Za-z\s]*?)\n/i);
+      const cardVersion = titleMatch ? titleMatch[1].trim() : (versionFieldMatch ? versionFieldMatch[1].trim() : null);
+
       return {
         marketValue,
         cardId: cardIdMatch ? cardIdMatch[1] : null,
         playerId: playerIdMatch ? playerIdMatch[1] : null,
         added: addedMatch ? addedMatch[1].trim().split('\n')[0] : null,
         likesPercent: likesMatch ? parseInt(likesMatch[1], 10) : null,
+        cardVersion,
       };
     });
 
-    const result = {
-      source: 'FUTWIZ',
-      ...data,
-      url,
-      timestamp: new Date().toISOString(),
-    };
-
+    const result = { source: 'FUTWIZ', ...data, url, timestamp: new Date().toISOString() };
     console.log(`    ✅ FUTWIZ:`, result);
     return result;
 

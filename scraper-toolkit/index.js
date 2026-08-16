@@ -1,15 +1,12 @@
 /**
- * FC26 SCRAPER ORCHESTRATOR (v3 - CLI commands + persistent store)
+ * FC26 SCRAPER ORCHESTRATOR (v4)
  *
  * Usage:
- *   node index.js                              scrape ALL players in players.json,
- *                                               write output/cards.json + upsert DB
- *   node index.js get <playerId>                read from DB; auto-refreshes if
- *                                               missing or older than MAX_AGE_MINUTES
- *   node index.js refresh <playerId>            force full refresh (all 4 sources)
- *   node index.js refresh <playerId> --source=futbin
- *                                               force refresh ONLY that one source,
- *                                               other sources kept from cache
+ *   node index.js                              scrape ALL players.json entries
+ *   node index.js get <playerId>                pretty overview (from cache, auto-refresh if stale)
+ *   node index.js get <playerId> --json          same, but raw JSON instead of the overview
+ *   node index.js refresh <playerId>             force full refresh (all 4 sources)
+ *   node index.js refresh <playerId> --source=futbin   refresh only 1 source
  */
 
 require('dotenv').config();
@@ -20,7 +17,7 @@ const futbinScraper = require('./futbin-scraper');
 const futggScraper = require('./futgg-scraper');
 const futwizScraper = require('./futwiz-scraper');
 const futnextScraper = require('./futnext-scraper');
-const { mergePrices } = require('./mergePrices');
+const { mergePrices, formatOverview } = require('./mergePrices');
 const store = require('./store');
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR || './output';
@@ -64,9 +61,7 @@ async function scrapePlayerFull(playerDef) {
     scrapeSource('futnext', playerName, urls.futnext),
   ]);
 
-  const merged = mergePrices({ playerName, futbinData, futggData, futwizData, futnextData });
-  console.log(`✅ Merged data:`, JSON.stringify(merged, null, 2));
-  return merged;
+  return mergePrices({ playerName, futbinData, futggData, futwizData, futnextData });
 }
 
 async function cmdScrapeAll() {
@@ -75,6 +70,7 @@ async function cmdScrapeAll() {
 
   for (const playerDef of players) {
     const merged = await scrapePlayerFull(playerDef);
+    console.log('\n' + formatOverview(merged));
     if (merged) {
       results.push(merged);
       if (playerDef.playerId) store.upsertEntry(playerDef.playerId, merged);
@@ -88,62 +84,54 @@ async function cmdScrapeAll() {
   console.log(`📁 DB updated: ${store.DB_FILE}`);
 }
 
-async function cmdGet(playerId) {
+async function cmdGet(playerId, { json }) {
   const entry = store.getEntry(playerId);
 
   if (entry && !store.isStale(entry, MAX_AGE_MINUTES)) {
-    console.log(`✅ From cache (stored ${entry.storedAt}, max age ${MAX_AGE_MINUTES}min):`);
-    console.log(JSON.stringify(entry, null, 2));
+    if (json) console.log(JSON.stringify(entry, null, 2));
+    else console.log('\n' + formatOverview(entry) + `\n\n(from cache, stored ${entry.storedAt})`);
     return;
   }
 
-  console.log(
-    entry
-      ? `⏰ Cache is older than ${MAX_AGE_MINUTES}min - refreshing...`
-      : `ℹ️  Not cached yet - fetching...`
-  );
-  await cmdRefresh(playerId, {});
+  console.log(entry ? `⏰ Cache older than ${MAX_AGE_MINUTES}min - refreshing...` : `ℹ️  Not cached yet - fetching...`);
+  await cmdRefresh(playerId, { json });
 }
 
-async function cmdRefresh(playerId, { source } = {}) {
+async function cmdRefresh(playerId, { source, json } = {}) {
   const playerDef = findPlayerDef(playerId);
   if (!playerDef) {
     console.log(`❌ playerId ${playerId} not found in players.json`);
     process.exit(1);
   }
 
+  let merged;
+
   if (!source) {
-    const merged = await scrapePlayerFull(playerDef);
-    store.upsertEntry(playerId, merged);
-    return;
+    merged = await scrapePlayerFull(playerDef);
+  } else {
+    if (!SCRAPERS[source]) {
+      console.log(`❌ Unknown source "${source}". Use one of: futbin, futgg, futwiz, futnext`);
+      process.exit(1);
+    }
+    const existing = store.getEntry(playerId) || { sources: {} };
+    const freshData = await scrapeSource(source, playerDef.playerName, playerDef.urls[source]);
+    const updatedSources = {
+      ...existing.sources,
+      [source]: freshData || existing.sources?.[source] || { error: 'Failed to scrape' },
+    };
+    const asDataOrNull = (s) => (updatedSources[s]?.error ? null : updatedSources[s]);
+    merged = mergePrices({
+      playerName: playerDef.playerName,
+      futbinData: asDataOrNull('futbin'),
+      futggData: asDataOrNull('futgg'),
+      futwizData: asDataOrNull('futwiz'),
+      futnextData: asDataOrNull('futnext'),
+    });
   }
-
-  if (!SCRAPERS[source]) {
-    console.log(`❌ Unknown source "${source}". Use one of: futbin, futgg, futwiz, futnext`);
-    process.exit(1);
-  }
-
-  const existing = store.getEntry(playerId) || { sources: {} };
-  const freshData = await scrapeSource(source, playerDef.playerName, playerDef.urls[source]);
-
-  const updatedSources = {
-    ...existing.sources,
-    [source]: freshData || existing.sources?.[source] || { error: 'Failed to scrape' },
-  };
-
-  const asDataOrNull = (s) => (updatedSources[s]?.error ? null : updatedSources[s]);
-
-  const merged = mergePrices({
-    playerName: playerDef.playerName,
-    futbinData: asDataOrNull('futbin'),
-    futggData: asDataOrNull('futgg'),
-    futwizData: asDataOrNull('futwiz'),
-    futnextData: asDataOrNull('futnext'),
-  });
 
   store.upsertEntry(playerId, merged);
-  console.log(`✅ Refreshed [${source}] for ${playerDef.playerName}:`);
-  console.log(JSON.stringify(merged, null, 2));
+  if (json) console.log(JSON.stringify(merged, null, 2));
+  else console.log('\n' + formatOverview(merged));
 }
 
 function parseArgs(argv) {
@@ -167,19 +155,19 @@ function parseArgs(argv) {
   if (!cmd || cmd === 'scrape-all') {
     await cmdScrapeAll();
   } else if (cmd === 'get') {
-    if (!positional[0]) { console.log('Usage: node index.js get <playerId>'); process.exit(1); }
-    await cmdGet(positional[0]);
+    if (!positional[0]) { console.log('Usage: node index.js get <playerId> [--json]'); process.exit(1); }
+    await cmdGet(positional[0], { json: !!flags.json });
   } else if (cmd === 'refresh') {
     if (!positional[0]) {
-      console.log('Usage: node index.js refresh <playerId> [--source=futbin]');
+      console.log('Usage: node index.js refresh <playerId> [--source=futbin] [--json]');
       process.exit(1);
     }
-    await cmdRefresh(positional[0], { source: flags.source });
+    await cmdRefresh(positional[0], { source: flags.source, json: !!flags.json });
   } else {
     console.log('Usage:');
     console.log('  node index.js                                scrape all players.json entries');
-    console.log('  node index.js get <playerId>                 get from cache, auto-refresh if stale');
-    console.log('  node index.js refresh <playerId>              force full refresh (all 4 sources)');
+    console.log('  node index.js get <playerId> [--json]         overview from cache, auto-refresh if stale');
+    console.log('  node index.js refresh <playerId> [--json]     force full refresh (all 4 sources)');
     console.log('  node index.js refresh <playerId> --source=futbin   refresh only 1 source');
   }
 

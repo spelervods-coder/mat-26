@@ -1,8 +1,12 @@
 /**
- * FUTNEXT SCRAPER (v2 - URL-based)
+ * FUTNEXT SCRAPER (v4)
  *
- * URL is used AS-IS (no re-encoding) - if pasted straight from the
- * browser address bar it is already percent-encoded correctly.
+ * NEW: cardVersion - verified via direct fetch:
+ * - document.title: "Kylian Mbappé Rare EA FC 26 - FUTNEXT"
+ * - h3 heading: "Kylian Mbappé - Rare" (fallback)
+ * Also confirmed: when no sales exist, page shows literal
+ * "No data to show" / "Recent sales are not available" - handled
+ * gracefully (returns null, not a crash).
  */
 
 const puppeteer = require('puppeteer-extra');
@@ -26,10 +30,7 @@ async function scrape(playerName, url) {
     );
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
-    await page.waitForFunction(
-      () => document.body.innerText.includes('Lowest'),
-      { timeout: 15000 }
-    );
+    await page.waitForFunction(() => document.body.innerText.includes('Lowest'), { timeout: 15000 });
 
     const data = await page.evaluate(() => {
       const num = (t) => {
@@ -45,21 +46,23 @@ async function scrape(playerName, url) {
       const avg24hMatch = bodyText.match(/Average\s*\(24H\)\s*\n?\s*([\d,]+)/i);
       const changeMatch = bodyText.match(/([\-\+]?[\d,]+)\s*\(([\-\d.]+)%\)/);
 
+      const titleMatch = document.title.match(/^.*?\s+(.+?)\s+EA FC\s*\d+/i);
+      const cardVersion = titleMatch ? titleMatch[1].trim() : null;
+
+      const hasRecentSales = !bodyText.includes('Recent sales are not available');
+      const recentSalesNote = hasRecentSales ? null : 'not available';
+
       return {
         currentCheapest: cheapestMatch ? num(cheapestMatch[1]) : lowest24hMatch ? num(lowest24hMatch[1]) : null,
         lowest24h: lowest24hMatch ? num(lowest24hMatch[1]) : null,
         average24h: avg24hMatch ? num(avg24hMatch[1]) : null,
         change24h: changeMatch ? { amount: num(changeMatch[1]), percent: parseFloat(changeMatch[2]) } : null,
+        cardVersion,
+        recentSalesNote,
       };
     });
 
-    const result = {
-      source: 'FutNext',
-      ...data,
-      url,
-      timestamp: new Date().toISOString(),
-    };
-
+    const result = { source: 'FutNext', ...data, url, timestamp: new Date().toISOString() };
     console.log(`    ✅ FutNext:`, result);
     return result;
 
