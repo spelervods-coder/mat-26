@@ -2,11 +2,13 @@
   "players": [
     {
       "playerName": "Kylian Mbappé",
-      "searchName": "Mbappe",
-      "futbin": { "id": "40", "slug": "kylian-mbappe" },
-      "futgg": { "id": "231747", "slug": "kylian-mbappe" },
-      "futwiz": { "id": "33", "slug": "kylian-mbappe" },
-      "futnext": { "id": "231747", "slug": "kylian-mbappé" }
+      "playerId": "231747",
+      "urls": {
+        "futbin": "https://www.futbin.com/26/player/40/kylian-mbappe/market",
+        "futgg": "https://www.fut.gg/players/231747-kylian-mbappe/26-231747/",
+        "futwiz": "https://www.futwiz.com/fc26/player/kylian-mbappe/33",
+        "futnext": "https://www.futnext.com/player/kylian-mapp%C3%A9/231747"
+      }
     }
   ]
 }
