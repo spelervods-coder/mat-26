@@ -37,16 +37,6 @@ async function scrape(playerName, url) {
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
     await page.waitForFunction(() => document.body.innerText.includes('Lowest BIN'), { timeout: 15000 });
 
-    // Best-effort: scroll to #prices section and give client-side content
-    // a moment to mount, in case Recent Sales / Live Auctions load lazily.
-    try {
-      await page.evaluate(() => {
-        const el = document.getElementById('prices');
-        if (el) el.scrollIntoView();
-      });
-      await new Promise(r => setTimeout(r, 1500));
-    } catch (_) { /* non-fatal */ }
-
     const data = await page.evaluate(() => {
       const num = (t) => {
         if (!t) return null;
@@ -78,17 +68,13 @@ async function scrape(playerName, url) {
       const rarityMatch = bodyText.match(/Rarity\s*\n?\s*([A-Za-z][A-Za-z\s]*?)\n/i);
       const momentumMatch = bodyText.match(/Lowest\s*\n?\s*([\d,]+)\s*\n?\s*Average\s*\n?\s*([\d,]+)\s*\n?\s*Highest\s*\n?\s*([\d,]+)/i);
 
-      // Experimental: look for a "Recent Sales" / "Live Auctions" heading
-      // and grab a handful of lines after it. Returns [] if not found.
-      function extractSectionRows(heading, maxRows = 10) {
-        const idx = bodyText.indexOf(heading);
-        if (idx === -1) return [];
-        const chunk = bodyText.slice(idx + heading.length, idx + heading.length + 800);
-        const lines = chunk.split('\n').map(l => l.trim()).filter(Boolean).slice(0, maxRows);
-        return lines;
-      }
-      const recentSalesRaw = extractSectionRows('Recent Sales');
-      const liveAuctionsRaw = extractSectionRows('Live Auctions');
+      // DISABLED (v6): the naive "find heading text, grab next N lines"
+      // approach was picking up unrelated content (PlayStyle labels etc,
+      // not actual sales rows) - confirmed via a live test run. Rather
+      // than return misleading data, this returns null until we have real
+      // selectors (needs a DevTools element-pick screenshot of that
+      // section once it has live data to inspect - same method used for
+      // the BIN price selectors).
 
       return {
         lowestBin,
@@ -102,8 +88,8 @@ async function scrape(playerName, url) {
         priceMomentum: momentumMatch
           ? { lowest: num(momentumMatch[1]), average: num(momentumMatch[2]), highest: num(momentumMatch[3]) }
           : null,
-        recentSalesRaw: recentSalesRaw.length ? recentSalesRaw : null,
-        liveAuctionsRaw: liveAuctionsRaw.length ? liveAuctionsRaw : null,
+        recentSalesRaw: null, // disabled, see comment above
+        liveAuctionsRaw: null, // disabled, see comment above
       };
     });
 

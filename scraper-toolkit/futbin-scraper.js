@@ -1,21 +1,14 @@
 /**
- * FUTBIN SCRAPER (v4)
+ * FUTBIN SCRAPER (v6)
  *
- * NEW:
- * - cardVersion: parsed from the breadcrumb ("... > Players > Kylian
- *   Mbappé Gold Rare") - the text after the player's name on that line.
- * - recentSales: reuses the "Latest Sales" mini-list already present on
- *   this same market page (.xs-column.full-width) - date + amount pairs.
- *   NOT the full EA-tax-breakdown sales history table (that lives on a
- *   separate /sales/ page - can be added later if useful, costs an extra
- *   page load per player).
+ * FIXED cardVersion: was guessing at a breadcrumb format that doesn't
+ * actually exist. Confirmed via direct fetch that FUTBIN's page always
+ * contains a stable sentence: "<Name>'s <Version> card is rated <rating>"
+ * - even in non-hydrated HTML. Using that instead.
  *
- * FIXED:
- * - priceRange/priceUpdated were returning null in practice because the
- *   .price-box-full-width-xxs-column selector wasn't reliably matching.
- *   Switched to body-innerText regex on the literal "PRICE RANGE:" /
- *   "PRICE UPDATED:" labels instead - same approach that already worked
- *   for trend/market-grid extraction.
+ * FIXED recentSales: the "find element with exact text 'Latest Sales'
+ * then walk up" logic wasn't reliably finding the right container.
+ * Reverted to the simpler, already-proven-working direct class query.
  */
 
 const puppeteer = require('puppeteer-extra');
@@ -63,10 +56,10 @@ async function scrape(playerName, rawUrl) {
       let lowestPrices = extractPrices(document.querySelector('.lowest-prices-wrapper'));
       if (lowestPrice !== null && lowestPrices[0] !== lowestPrice) lowestPrices.unshift(lowestPrice);
       lowestPrices = lowestPrices.slice(0, 5);
+      const lowestPricesCount = lowestPrices.length;
 
       const bodyText = document.body.innerText;
 
-      // FIXED: body-text regex instead of broken selector
       const rangeMatch = bodyText.match(/PRICE RANGE:\s*\n?\s*([\d,]+)\s*-\s*([\d,]+)/i);
       const priceRange = rangeMatch ? { min: num(rangeMatch[1]), max: num(rangeMatch[2]) } : null;
       const updatedMatch = bodyText.match(/PRICE UPDATED:\s*([^\n]+)/i);
@@ -78,41 +71,23 @@ async function scrape(playerName, rawUrl) {
 
       const trendMatch = bodyText.match(/Trend:\s*([\-\d.]+%\s*\([^)]+\))/i);
 
-      // Card version - from the breadcrumb line: "... > Players > <Name> <Version>"
-      const breadcrumbMatch = bodyText.match(/Players\s*>\s*[^\n]+/i);
-      let cardVersion = null;
-      if (breadcrumbMatch) {
-        const line = breadcrumbMatch[0];
-        // strip "Players > " and the player's name, keep trailing words as version
-        const afterPlayers = line.replace(/^Players\s*>\s*/i, '').trim();
-        const words = afterPlayers.split(/\s+/);
-        // heuristic: version is usually the last 1-3 words (e.g. "Gold Rare", "TOTW", "TOTY Honorable Mentions")
-        cardVersion = words.slice(-3).join(' ');
-      }
-      if (!cardVersion) {
-        const titleMatch = document.title.match(/[\u2013-]\s*(.+?)\s*EA FC/i);
-        cardVersion = titleMatch ? titleMatch[1].trim() : null;
-      }
+      // FIXED: reliable "<Name>'s <Version> card is rated" sentence, confirmed via live fetch
+      const versionMatch = bodyText.match(/['\u2019]s\s+(.+?)\s+card is rated/i);
+      const cardVersion = versionMatch ? versionMatch[1].trim() : null;
 
-      // Recent sales mini-list (same page, "Latest Sales" panel)
-      const salesContainer = Array.from(document.querySelectorAll('*')).find(
-        el => el.children.length === 0 && el.textContent.trim() === 'Latest Sales'
-      )?.closest('div')?.parentElement;
-      let recentSales = [];
-      if (salesContainer) {
-        const rows = Array.from(salesContainer.querySelectorAll('.xs-column.full-width'));
-        recentSales = rows
-          .map(el => clean(el.textContent))
-          .filter(Boolean)
-          .map(text => {
-            const m = text.match(/^(.+?\d{1,2}:\d{2}\s*[AP]M)\s*([\d,.]+K?)/i);
-            return m ? { when: m[1].trim(), amount: m[2].trim() } : { raw: text };
-          });
-      }
+      // FIXED: simple direct query instead of fragile heading-anchor walk
+      const salesRows = Array.from(document.querySelectorAll('.xs-column.full-width'))
+        .map(el => clean(el.textContent))
+        .filter(Boolean);
+      const recentSales = salesRows.map(text => {
+        const m = text.match(/^(.+?\d{1,2}:\d{2}\s*[AP]M)\s*([\d,.]+K?)/i);
+        return m ? { when: m[1].trim(), amount: m[2].trim() } : { raw: text };
+      });
 
       return {
         lowestPrice,
         lowestPrices,
+        lowestPricesCount,
         priceRange,
         priceUpdated,
         averageBin: avgBinMatch ? num(avgBinMatch[1]) : null,

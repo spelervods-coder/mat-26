@@ -81,6 +81,7 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
       binPricePercentInRange,
       priceRange: futbinData?.priceRange ?? null,
       futbinLowest5: futbinData?.lowestPrices ?? null,
+      futbinLowest5Count: futbinData?.lowestPricesCount ?? null,
       recentSales: futbinData?.recentSales ?? null,
       liveAuctionsFutgg: futggData?.liveAuctionsRaw ?? null,
       recentSalesFutgg: futggData?.recentSalesRaw ?? null,
@@ -121,6 +122,10 @@ function formatOverview(merged) {
     m.recentSales.slice(0, 5).forEach(s => lines.push(`  ${s.when ?? s.raw ?? '?'}${s.amount ? ' — ' + s.amount : ''}`));
   }
   lines.push('');
+  if (merged.timing) {
+    const t = merged.timing;
+    lines.push(`Scraped in ${t.total}ms (futbin ${t.futbin ?? '-'}ms, futgg ${t.futgg ?? '-'}ms, futwiz ${t.futwiz ?? '-'}ms, futnext ${t.futnext ?? '-'}ms)`);
+  }
   lines.push(`Last updated: ${m.lastUpdated}`);
   return lines.join('\n');
 }

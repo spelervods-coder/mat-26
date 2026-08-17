@@ -1,12 +1,11 @@
 /**
- * FUTNEXT SCRAPER (v4)
+ * FUTNEXT SCRAPER (v6)
  *
- * NEW: cardVersion - verified via direct fetch:
- * - document.title: "Kylian Mbappé Rare EA FC 26 - FUTNEXT"
- * - h3 heading: "Kylian Mbappé - Rare" (fallback)
- * Also confirmed: when no sales exist, page shows literal
- * "No data to show" / "Recent sales are not available" - handled
- * gracefully (returns null, not a crash).
+ * FIXED cardVersion: old regex assumed the name was a single word before
+ * the rarity, but titles are "<Full Name> <Version> EA FC <year> - FUTNEXT"
+ * - with a multi-word name this captured too much ("Mbappé Rare" instead
+ *   of "Rare"). Now strips the KNOWN playerName from the title first
+ *   (passed in from the caller), leaving only the version.
  */
 
 const puppeteer = require('puppeteer-extra');
@@ -32,7 +31,7 @@ async function scrape(playerName, url) {
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
     await page.waitForFunction(() => document.body.innerText.includes('Lowest'), { timeout: 15000 });
 
-    const data = await page.evaluate(() => {
+    const data = await page.evaluate((playerNameArg) => {
       const num = (t) => {
         if (!t) return null;
         const n = parseInt(t.replace(/[^\d]/g, ''), 10);
@@ -46,8 +45,18 @@ async function scrape(playerName, url) {
       const avg24hMatch = bodyText.match(/Average\s*\(24H\)\s*\n?\s*([\d,]+)/i);
       const changeMatch = bodyText.match(/([\-\+]?[\d,]+)\s*\(([\-\d.]+)%\)/);
 
-      const titleMatch = document.title.match(/^.*?\s+(.+?)\s+EA FC\s*\d+/i);
-      const cardVersion = titleMatch ? titleMatch[1].trim() : null;
+      // FIXED: strip the known player name from the title, leaving only the version
+      let cardVersion = null;
+      const escapedName = playerNameArg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const nameStripRe = new RegExp(escapedName + '\\s+(.+?)\\s+EA FC', 'i');
+      const titleMatch = document.title.match(nameStripRe);
+      if (titleMatch) {
+        cardVersion = titleMatch[1].trim();
+      } else {
+        // fallback: generic pattern if the exact name doesn't match (e.g. accents differ)
+        const genericMatch = document.title.match(/\s(.+?)\s+EA FC\s*\d+/i);
+        cardVersion = genericMatch ? genericMatch[1].trim() : null;
+      }
 
       const hasRecentSales = !bodyText.includes('Recent sales are not available');
       const recentSalesNote = hasRecentSales ? null : 'not available';
@@ -60,7 +69,7 @@ async function scrape(playerName, url) {
         cardVersion,
         recentSalesNote,
       };
-    });
+    }, playerName);
 
     const result = { source: 'FutNext', ...data, url, timestamp: new Date().toISOString() };
     console.log(`    ✅ FutNext:`, result);

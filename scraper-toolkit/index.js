@@ -1,5 +1,9 @@
 /**
- * FC26 SCRAPER ORCHESTRATOR (v4)
+ * FC26 SCRAPER ORCHESTRATOR (v5)
+ *
+ * NEW: per-source + total timing, logged to console AND appended to
+ * output/scrape-timings.log (JSONL - one line per scrape run) so you can
+ * see over time which source is slow or flaky.
  *
  * Usage:
  *   node index.js                              scrape ALL players.json entries
@@ -24,6 +28,7 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR || './output';
 const PLAYERS_FILE = './players.json';
 const DELAY_MS = parseInt(process.env.DELAY_MS || '1000', 10);
 const MAX_AGE_MINUTES = parseInt(process.env.MAX_AGE_MINUTES || '30', 10);
+const TIMING_LOG = path.join(OUTPUT_DIR, 'scrape-timings.log');
 
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -41,6 +46,15 @@ function findPlayerDef(playerId) {
   return loadPlayersConfig().find(p => String(p.playerId) === String(playerId));
 }
 
+function logTiming(playerId, playerName, timing, success) {
+  const entry = { timestamp: new Date().toISOString(), playerId, playerName, timing, success };
+  try {
+    fs.appendFileSync(TIMING_LOG, JSON.stringify(entry) + '\n');
+  } catch (e) {
+    console.error('⚠️  Could not write timing log:', e.message);
+  }
+}
+
 async function scrapeSource(source, playerName, url) {
   try {
     return await SCRAPERS[source].scrape(playerName, url);
@@ -50,18 +64,40 @@ async function scrapeSource(source, playerName, url) {
   }
 }
 
+async function timedScrapeSource(source, playerName, url, timing) {
+  const start = Date.now();
+  const result = await scrapeSource(source, playerName, url);
+  const ms = Date.now() - start;
+  timing[source] = ms;
+  console.log(`    ⏱  ${source}: ${ms}ms`);
+  return result;
+}
+
 async function scrapePlayerFull(playerDef) {
-  const { playerName, urls } = playerDef;
+  const { playerName, playerId, urls } = playerDef;
   console.log(`\n🔍 Scraping all sources for: ${playerName}`);
 
+  const overallStart = Date.now();
+  const timing = {};
+
   const [futbinData, futggData, futwizData, futnextData] = await Promise.all([
-    scrapeSource('futbin', playerName, urls.futbin),
-    scrapeSource('futgg', playerName, urls.futgg),
-    scrapeSource('futwiz', playerName, urls.futwiz),
-    scrapeSource('futnext', playerName, urls.futnext),
+    timedScrapeSource('futbin', playerName, urls.futbin, timing),
+    timedScrapeSource('futgg', playerName, urls.futgg, timing),
+    timedScrapeSource('futwiz', playerName, urls.futwiz, timing),
+    timedScrapeSource('futnext', playerName, urls.futnext, timing),
   ]);
 
-  return mergePrices({ playerName, futbinData, futggData, futwizData, futnextData });
+  timing.total = Date.now() - overallStart;
+  console.log(`    ⏱  total: ${timing.total}ms`);
+
+  const merged = mergePrices({ playerName, futbinData, futggData, futwizData, futnextData });
+  merged.timing = timing;
+
+  logTiming(playerId, playerName, timing, {
+    futbin: !!futbinData, futgg: !!futggData, futwiz: !!futwizData, futnext: !!futnextData,
+  });
+
+  return merged;
 }
 
 async function cmdScrapeAll() {
@@ -82,6 +118,7 @@ async function cmdScrapeAll() {
   fs.writeFileSync(outputPath, JSON.stringify({ players: results }, null, 2));
   console.log(`\n📁 Saved to: ${outputPath}`);
   console.log(`📁 DB updated: ${store.DB_FILE}`);
+  console.log(`📁 Timing log: ${TIMING_LOG}`);
 }
 
 async function cmdGet(playerId, { json }) {
@@ -114,7 +151,10 @@ async function cmdRefresh(playerId, { source, json } = {}) {
       process.exit(1);
     }
     const existing = store.getEntry(playerId) || { sources: {} };
+    const start = Date.now();
     const freshData = await scrapeSource(source, playerDef.playerName, playerDef.urls[source]);
+    console.log(`    ⏱  ${source}: ${Date.now() - start}ms`);
+
     const updatedSources = {
       ...existing.sources,
       [source]: freshData || existing.sources?.[source] || { error: 'Failed to scrape' },
