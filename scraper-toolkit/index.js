@@ -29,6 +29,7 @@ const PLAYERS_FILE = './players.json';
 const DELAY_MS = parseInt(process.env.DELAY_MS || '1000', 10);
 const MAX_AGE_MINUTES = parseInt(process.env.MAX_AGE_MINUTES || '30', 10);
 const TIMING_LOG = path.join(OUTPUT_DIR, 'scrape-timings.log');
+const PRICE_HISTORY_LOG = path.join(OUTPUT_DIR, 'price-history.jsonl');
 
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -52,6 +53,31 @@ function logTiming(playerId, playerName, timing, success) {
     fs.appendFileSync(TIMING_LOG, JSON.stringify(entry) + '\n');
   } catch (e) {
     console.error('⚠️  Could not write timing log:', e.message);
+  }
+}
+
+// Separate from players-db.json (which only holds the LATEST snapshot).
+// This appends every scrape as its own line, building a time-series -
+// needed later for sales-per-hour / volatility analysis (KPI engine).
+// Deliberately lean (no raw per-source dumps) to keep file size sane.
+function logPriceSnapshot(playerId, playerName, merged) {
+  const m = merged.merged || {};
+  const entry = {
+    timestamp: new Date().toISOString(),
+    playerId,
+    playerName,
+    cardVersion: merged.cardVersion,
+    binPrices: m.binPrices,
+    averageBinPrice: m.averageBinPrice,
+    lowestAcrossSources: m.lowestAcrossSources,
+    priceRange: m.priceRange,
+    binPricePercentInRange: m.binPricePercentInRange,
+    trend: m.trend,
+  };
+  try {
+    fs.appendFileSync(PRICE_HISTORY_LOG, JSON.stringify(entry) + '\n');
+  } catch (e) {
+    console.error('⚠️  Could not write price history log:', e.message);
   }
 }
 
@@ -96,6 +122,7 @@ async function scrapePlayerFull(playerDef) {
   logTiming(playerId, playerName, timing, {
     futbin: !!futbinData, futgg: !!futggData, futwiz: !!futwizData, futnext: !!futnextData,
   });
+  if (playerId) logPriceSnapshot(playerId, playerName, merged);
 
   return merged;
 }

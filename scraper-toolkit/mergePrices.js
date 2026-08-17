@@ -68,6 +68,7 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
     playerId: firstNonNull(futggData?.playerId, futnextData?.futnextId, futwizData?.playerId, futwizData?.cardId),
     cardVersion,
     versionCheck,
+    dataFreshness: { futbin: futbinData?.priceUpdated ?? null }, // only FUTBIN exposes this natively so far
     sources: {
       futbin: futbinData || { error: 'Failed to scrape' },
       futgg: futggData || { error: 'Failed to scrape' },
@@ -111,6 +112,7 @@ function formatOverview(merged) {
   lines.push(`  FutNext: ${m.binPrices?.futnext ?? '—'}`);
   lines.push(`  Average: ${m.averageBinPrice ?? '—'}`);
   if (m.lowestAcrossSources) lines.push(`  Cheapest right now: ${m.lowestAcrossSources.price} on ${m.lowestAcrossSources.source}`);
+  if (merged.dataFreshness?.futbin) lines.push(`  FUTBIN data freshness: ${merged.dataFreshness.futbin}`);
   if (m.priceRange) {
     lines.push(`  Price range (FUTBIN): ${m.priceRange.min} - ${m.priceRange.max}${m.binPricePercentInRange !== null ? ` (currently at ${m.binPricePercentInRange}% of range)` : ''}`);
   }

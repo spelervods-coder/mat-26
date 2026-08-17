@@ -75,14 +75,21 @@ async function scrape(playerName, rawUrl) {
       const versionMatch = bodyText.match(/['\u2019]s\s+(.+?)\s+card is rated/i);
       const cardVersion = versionMatch ? versionMatch[1].trim() : null;
 
-      // FIXED: simple direct query instead of fragile heading-anchor walk
+      // FIXED (v7): the .xs-column.full-width class is ALSO used somewhere
+      // in the comments/reviews widget on this page - the old {raw: text}
+      // fallback was letting a giant comment-thread blob through as a
+      // "sale". Now: only keep rows matching the exact date+amount shape,
+      // AND add a length guard as a second safety net. No fallback.
       const salesRows = Array.from(document.querySelectorAll('.xs-column.full-width'))
         .map(el => clean(el.textContent))
-        .filter(Boolean);
-      const recentSales = salesRows.map(text => {
-        const m = text.match(/^(.+?\d{1,2}:\d{2}\s*[AP]M)\s*([\d,.]+K?)/i);
-        return m ? { when: m[1].trim(), amount: m[2].trim() } : { raw: text };
-      });
+        .filter(Boolean)
+        .filter(text => text.length < 100); // real sale rows are short; comment blobs are not
+      const recentSales = salesRows
+        .map(text => {
+          const m = text.match(/^(.+?\d{1,2}:\d{2}\s*[AP]M)\s*([\d,.]+K?)/i);
+          return m ? { when: m[1].trim(), amount: m[2].trim() } : null;
+        })
+        .filter(Boolean); // drop anything that doesn't match the expected shape - no raw fallback
 
       return {
         lowestPrice,
