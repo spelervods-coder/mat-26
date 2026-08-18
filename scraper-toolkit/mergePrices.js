@@ -37,7 +37,7 @@ function checkVersionAgreement(futbinV, futggV, futwizV, futnextV) {
   return { checked: true, agree: unique.length === 1, values: { futbin: futbinV, futgg: futggV, futwiz: futwizV, futnext: futnextV } };
 }
 
-function mergePrices({ playerName, futbinData, futggData, futwizData, futnextData }) {
+function mergePrices({ playerName, futbinData, futggData, futwizData, futnextData, futbinSalesData = null }) {
   const binPrices = {
     futbin: futbinData?.lowestPrice ?? null,
     futgg: futggData?.lowestBin ?? null,
@@ -63,9 +63,31 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
   const cardVersion = firstNonNull(futggData?.cardVersion, futwizData?.cardVersion, futbinData?.cardVersion, futnextData?.cardVersion);
   const versionCheck = checkVersionAgreement(futbinData?.cardVersion, futggData?.cardVersion, futwizData?.cardVersion, futnextData?.cardVersion);
 
+  // Liquidity metrics for the pricing model (Cont/Stoikov/Talreja-style
+  // order-flow inputs). salesPerHour comes from FUTBIN's real sales
+  // history (bid/bin/expired classified). listingsSnapshot comes from
+  // FUT.GG's Live Auctions table - a SUPPLY DEPTH snapshot (how many
+  // active auctions right now), not literally a "listings created per
+  // hour" flow rate - related but distinct, treated as a proxy.
+  const salesPerHourEstimate = futbinSalesData?.salesPerHourEstimate ?? null;
+  const activeListingsSnapshot = futggData?.liveAuctionsRaw?.length ?? null;
+  const liquidityRatio = (salesPerHourEstimate !== null && activeListingsSnapshot)
+    ? Math.round((salesPerHourEstimate / activeListingsSnapshot) * 100) / 100
+    : null;
+  const bidBinBreakdown = futbinSalesData
+    ? { bin: futbinSalesData.binCount, bid: futbinSalesData.bidCount, expired: futbinSalesData.expiredCount, sampleSize: futbinSalesData.sampleSize }
+    : null;
+
   return {
     playerName,
-    playerId: firstNonNull(futggData?.playerId, futnextData?.futnextId, futwizData?.playerId, futwizData?.cardId),
+    // CARD-specific ID (itemId/cardId) - NOT the same across a player's
+    // different card versions (base Gold Rare vs TOTW vs Icon etc all
+    // have DIFFERENT cardIds but the SAME playerId). This is the
+    // canonical unique key for tracking one specific card.
+    cardId: firstNonNull(futggData?.itemId, futwizData?.cardId, futggData?.playerId, futwizData?.playerId),
+    // The PERSON's ID - stays constant across all of a player's cards.
+    // Kept separately so you could later query "all cards for this player".
+    playerId: firstNonNull(futggData?.playerId, futwizData?.playerId),
     cardVersion,
     versionCheck,
     dataFreshness: { futbin: futbinData?.priceUpdated ?? null }, // only FUTBIN exposes this natively so far
@@ -76,6 +98,12 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
       futnext: futnextData || { error: 'Failed to scrape' },
     },
     merged: {
+      salesPerHourEstimate,
+      activeListingsSnapshot,
+      liquidityRatio,
+      bidBinBreakdown,
+      recentSalesFutggStructured: futggData?.recentSalesRaw ?? null,
+      liveAuctionsFutggStructured: futggData?.liveAuctionsRaw ?? null,
       binPrices,
       lowestAcrossSources,
       averageBinPrice: calculateAverage(Object.values(binPrices)),
@@ -84,8 +112,6 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
       futbinLowest5: futbinData?.lowestPrices ?? null,
       futbinLowest5Count: futbinData?.lowestPricesCount ?? null,
       recentSales: futbinData?.recentSales ?? null,
-      liveAuctionsFutgg: futggData?.liveAuctionsRaw ?? null,
-      recentSalesFutgg: futggData?.recentSalesRaw ?? null,
       rating: firstNonNull(futggData?.rating),
       position: firstNonNull(futggData?.position),
       club: firstNonNull(futggData?.club),
@@ -113,6 +139,19 @@ function formatOverview(merged) {
   lines.push(`  Average: ${m.averageBinPrice ?? '—'}`);
   if (m.lowestAcrossSources) lines.push(`  Cheapest right now: ${m.lowestAcrossSources.price} on ${m.lowestAcrossSources.source}`);
   if (merged.dataFreshness?.futbin) lines.push(`  FUTBIN data freshness: ${merged.dataFreshness.futbin}`);
+  if (m.salesPerHourEstimate !== null) {
+    lines.push(`  Sales/hr (FUTBIN, real): ~${m.salesPerHourEstimate}`);
+  }
+  if (m.activeListingsSnapshot !== null) {
+    lines.push(`  Active listings snapshot (FUT.GG): ${m.activeListingsSnapshot}`);
+  }
+  if (m.liquidityRatio !== null) {
+    lines.push(`  Liquidity ratio (sales/listings): ${m.liquidityRatio}`);
+  }
+  if (m.bidBinBreakdown) {
+    const b = m.bidBinBreakdown;
+    lines.push(`  Recent sales breakdown: ${b.bin} bin, ${b.bid} bid, ${b.expired} expired (n=${b.sampleSize})`);
+  }
   if (m.priceRange) {
     lines.push(`  Price range (FUTBIN): ${m.priceRange.min} - ${m.priceRange.max}${m.binPricePercentInRange !== null ? ` (currently at ${m.binPricePercentInRange}% of range)` : ''}`);
   }

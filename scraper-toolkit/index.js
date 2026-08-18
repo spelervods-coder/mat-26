@@ -1,16 +1,23 @@
 /**
- * FC26 SCRAPER ORCHESTRATOR (v5)
+ * FC26 SCRAPER ORCHESTRATOR (v8)
  *
- * NEW: per-source + total timing, logged to console AND appended to
- * output/scrape-timings.log (JSONL - one line per scrape run) so you can
- * see over time which source is slow or flaky.
+ * NEW: cardId auto-backfill. If a player was added without a cardId
+ * (add-player.ps1 allows this), the first scrape derives it from FUT.GG's
+ * itemId / FUTWIZ's cardId (via mergePrices.js) and writes it back into
+ * players.json so subsequent runs have a stable key.
+ *
+ * FIXED: was keying everything on "playerId", which is NOT unique per
+ * card (a player's Gold Rare, TOTW, Icon etc all share the same playerId
+ * but have DIFFERENT cardIds). Now uses cardId as the canonical key, with
+ * backward-compatible fallback to the old "playerId" field for entries
+ * added before this fix.
  *
  * Usage:
  *   node index.js                              scrape ALL players.json entries
- *   node index.js get <playerId>                pretty overview (from cache, auto-refresh if stale)
- *   node index.js get <playerId> --json          same, but raw JSON instead of the overview
- *   node index.js refresh <playerId>             force full refresh (all 4 sources)
- *   node index.js refresh <playerId> --source=futbin   refresh only 1 source
+ *   node index.js get <cardId>                  pretty overview (from cache, auto-refresh if stale)
+ *   node index.js get <cardId> --json            same, but raw JSON instead of the overview
+ *   node index.js refresh <cardId>               force full refresh (all 4 sources)
+ *   node index.js refresh <cardId> --source=futbin   refresh only 1 source
  */
 
 require('dotenv').config();
@@ -43,12 +50,36 @@ function loadPlayersConfig() {
   return JSON.parse(fs.readFileSync(PLAYERS_FILE, 'utf8')).players;
 }
 
-function findPlayerDef(playerId) {
-  return loadPlayersConfig().find(p => String(p.playerId) === String(playerId));
+function savePlayersConfig(players) {
+  fs.writeFileSync(PLAYERS_FILE, JSON.stringify({ players }, null, 2));
 }
 
-function logTiming(playerId, playerName, timing, success) {
-  const entry = { timestamp: new Date().toISOString(), playerId, playerName, timing, success };
+// Backward compatible: old entries used "playerId" as the (mistaken)
+// unique key; new entries use "cardId" (the correct one - see
+// mergePrices.js). This resolves either, preferring cardId.
+function getEntryId(playerDef) {
+  return playerDef.cardId ?? playerDef.playerId ?? null;
+}
+
+function findPlayerDef(id) {
+  return loadPlayersConfig().find(p => String(getEntryId(p)) === String(id));
+}
+
+// If a player was added without a cardId, fill it in now (matched by
+// futbin URL, which is required and unique) so future runs have a stable key.
+function backfillCardIdIfMissing(playerDef, derivedCardId) {
+  if (getEntryId(playerDef) || !derivedCardId) return;
+  const players = loadPlayersConfig();
+  const match = players.find(p => p.urls?.futbin === playerDef.urls?.futbin);
+  if (match && !getEntryId(match)) {
+    match.cardId = derivedCardId;
+    savePlayersConfig(players);
+    console.log(`  📝 Backfilled cardId ${derivedCardId} for ${playerDef.playerName} into players.json`);
+  }
+}
+
+function logTiming(id, playerName, timing, success) {
+  const entry = { timestamp: new Date().toISOString(), cardId: id, playerName, timing, success };
   try {
     fs.appendFileSync(TIMING_LOG, JSON.stringify(entry) + '\n');
   } catch (e) {
@@ -59,12 +90,11 @@ function logTiming(playerId, playerName, timing, success) {
 // Separate from players-db.json (which only holds the LATEST snapshot).
 // This appends every scrape as its own line, building a time-series -
 // needed later for sales-per-hour / volatility analysis (KPI engine).
-// Deliberately lean (no raw per-source dumps) to keep file size sane.
-function logPriceSnapshot(playerId, playerName, merged) {
+function logPriceSnapshot(id, playerName, merged) {
   const m = merged.merged || {};
   const entry = {
     timestamp: new Date().toISOString(),
-    playerId,
+    cardId: id,
     playerName,
     cardVersion: merged.cardVersion,
     binPrices: m.binPrices,
@@ -93,38 +123,69 @@ async function scrapeSource(source, playerName, url) {
 async function timedScrapeSource(source, playerName, url, timing) {
   const start = Date.now();
   const result = await scrapeSource(source, playerName, url);
-  const ms = Date.now() - start;
-  timing[source] = ms;
-  console.log(`    ⏱  ${source}: ${ms}ms`);
+  timing[source] = Date.now() - start;
+  console.log(`    ⏱  ${source}: ${timing[source]}ms`);
   return result;
 }
 
+// Pure scrape+merge - no store/log side effects (those happen in the
+// callers below, AFTER cardId backfill is resolved).
 async function scrapePlayerFull(playerDef) {
-  const { playerName, playerId, urls } = playerDef;
+  const { playerName, urls } = playerDef;
   console.log(`\n🔍 Scraping all sources for: ${playerName}`);
 
   const overallStart = Date.now();
   const timing = {};
 
-  const [futbinData, futggData, futwizData, futnextData] = await Promise.all([
+  // FUTBIN sales-history runs as its own Puppeteer session (separate
+  // page: /sales/ vs /market) but in PARALLEL with the other 4, not
+  // after - same pattern as timedScrapeSource, just a different scraper
+  // function. Gives real bid/bin/expired classified transaction data.
+  async function timedScrapeSalesHistory() {
+    const start = Date.now();
+    let result = null;
+    try {
+      result = await futbinScraper.scrapeSalesHistory(playerName, urls.futbin);
+    } catch (e) {
+      console.error('❌ FUTBIN sales history failed:', e.message);
+    }
+    timing.futbinSales = Date.now() - start;
+    console.log(`    ⏱  futbinSales: ${timing.futbinSales}ms`);
+    return result;
+  }
+
+  const [futbinData, futggData, futwizData, futnextData, futbinSalesData] = await Promise.all([
     timedScrapeSource('futbin', playerName, urls.futbin, timing),
     timedScrapeSource('futgg', playerName, urls.futgg, timing),
     timedScrapeSource('futwiz', playerName, urls.futwiz, timing),
     timedScrapeSource('futnext', playerName, urls.futnext, timing),
+    timedScrapeSalesHistory(),
   ]);
 
   timing.total = Date.now() - overallStart;
   console.log(`    ⏱  total: ${timing.total}ms`);
 
-  const merged = mergePrices({ playerName, futbinData, futggData, futwizData, futnextData });
+  const merged = mergePrices({ playerName, futbinData, futggData, futwizData, futnextData, futbinSalesData });
   merged.timing = timing;
-
-  logTiming(playerId, playerName, timing, {
-    futbin: !!futbinData, futgg: !!futggData, futwiz: !!futwizData, futnext: !!futnextData,
-  });
-  if (playerId) logPriceSnapshot(playerId, playerName, merged);
-
   return merged;
+}
+
+function storeAndLog(playerDef, merged) {
+  let id = getEntryId(playerDef);
+  if (!id && merged.cardId) {
+    backfillCardIdIfMissing(playerDef, merged.cardId);
+    id = merged.cardId;
+  }
+  if (!id) {
+    console.log('  ⚠️  No cardId available (not found on any source) - skipping DB/log write for this player.');
+    return;
+  }
+  store.upsertEntry(id, merged);
+  logTiming(id, playerDef.playerName, merged.timing, {
+    futbin: !merged.sources.futbin?.error, futgg: !merged.sources.futgg?.error,
+    futwiz: !merged.sources.futwiz?.error, futnext: !merged.sources.futnext?.error,
+  });
+  logPriceSnapshot(id, playerDef.playerName, merged);
 }
 
 async function cmdScrapeAll() {
@@ -136,7 +197,7 @@ async function cmdScrapeAll() {
     console.log('\n' + formatOverview(merged));
     if (merged) {
       results.push(merged);
-      if (playerDef.playerId) store.upsertEntry(playerDef.playerId, merged);
+      storeAndLog(playerDef, merged);
     }
     await new Promise(r => setTimeout(r, DELAY_MS));
   }
@@ -146,10 +207,11 @@ async function cmdScrapeAll() {
   console.log(`\n📁 Saved to: ${outputPath}`);
   console.log(`📁 DB updated: ${store.DB_FILE}`);
   console.log(`📁 Timing log: ${TIMING_LOG}`);
+  console.log(`📁 Price history: ${PRICE_HISTORY_LOG}`);
 }
 
-async function cmdGet(playerId, { json }) {
-  const entry = store.getEntry(playerId);
+async function cmdGet(id, { json }) {
+  const entry = store.getEntry(id);
 
   if (entry && !store.isStale(entry, MAX_AGE_MINUTES)) {
     if (json) console.log(JSON.stringify(entry, null, 2));
@@ -158,13 +220,13 @@ async function cmdGet(playerId, { json }) {
   }
 
   console.log(entry ? `⏰ Cache older than ${MAX_AGE_MINUTES}min - refreshing...` : `ℹ️  Not cached yet - fetching...`);
-  await cmdRefresh(playerId, { json });
+  await cmdRefresh(id, { json });
 }
 
-async function cmdRefresh(playerId, { source, json } = {}) {
-  const playerDef = findPlayerDef(playerId);
+async function cmdRefresh(id, { source, json } = {}) {
+  const playerDef = findPlayerDef(id);
   if (!playerDef) {
-    console.log(`❌ playerId ${playerId} not found in players.json`);
+    console.log(`❌ cardId ${id} not found in players.json`);
     process.exit(1);
   }
 
@@ -177,7 +239,7 @@ async function cmdRefresh(playerId, { source, json } = {}) {
       console.log(`❌ Unknown source "${source}". Use one of: futbin, futgg, futwiz, futnext`);
       process.exit(1);
     }
-    const existing = store.getEntry(playerId) || { sources: {} };
+    const existing = store.getEntry(id) || { sources: {} };
     const start = Date.now();
     const freshData = await scrapeSource(source, playerDef.playerName, playerDef.urls[source]);
     console.log(`    ⏱  ${source}: ${Date.now() - start}ms`);
@@ -194,9 +256,10 @@ async function cmdRefresh(playerId, { source, json } = {}) {
       futwizData: asDataOrNull('futwiz'),
       futnextData: asDataOrNull('futnext'),
     });
+    merged.timing = null;
   }
 
-  store.upsertEntry(playerId, merged);
+  storeAndLog(playerDef, merged);
   if (json) console.log(JSON.stringify(merged, null, 2));
   else console.log('\n' + formatOverview(merged));
 }
@@ -222,20 +285,20 @@ function parseArgs(argv) {
   if (!cmd || cmd === 'scrape-all') {
     await cmdScrapeAll();
   } else if (cmd === 'get') {
-    if (!positional[0]) { console.log('Usage: node index.js get <playerId> [--json]'); process.exit(1); }
+    if (!positional[0]) { console.log('Usage: node index.js get <cardId> [--json]'); process.exit(1); }
     await cmdGet(positional[0], { json: !!flags.json });
   } else if (cmd === 'refresh') {
     if (!positional[0]) {
-      console.log('Usage: node index.js refresh <playerId> [--source=futbin] [--json]');
+      console.log('Usage: node index.js refresh <cardId> [--source=futbin] [--json]');
       process.exit(1);
     }
     await cmdRefresh(positional[0], { source: flags.source, json: !!flags.json });
   } else {
     console.log('Usage:');
     console.log('  node index.js                                scrape all players.json entries');
-    console.log('  node index.js get <playerId> [--json]         overview from cache, auto-refresh if stale');
-    console.log('  node index.js refresh <playerId> [--json]     force full refresh (all 4 sources)');
-    console.log('  node index.js refresh <playerId> --source=futbin   refresh only 1 source');
+    console.log('  node index.js get <cardId> [--json]           overview from cache, auto-refresh if stale');
+    console.log('  node index.js refresh <cardId> [--json]       force full refresh (all 4 sources)');
+    console.log('  node index.js refresh <cardId> --source=futbin   refresh only 1 source');
   }
 
   process.exit(0);

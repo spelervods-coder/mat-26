@@ -68,13 +68,46 @@ async function scrape(playerName, url) {
       const rarityMatch = bodyText.match(/Rarity\s*\n?\s*([A-Za-z][A-Za-z\s]*?)\n/i);
       const momentumMatch = bodyText.match(/Lowest\s*\n?\s*([\d,]+)\s*\n?\s*Average\s*\n?\s*([\d,]+)\s*\n?\s*Highest\s*\n?\s*([\d,]+)/i);
 
-      // DISABLED (v6): the naive "find heading text, grab next N lines"
-      // approach was picking up unrelated content (PlayStyle labels etc,
-      // not actual sales rows) - confirmed via a live test run. Rather
-      // than return misleading data, this returns null until we have real
-      // selectors (needs a DevTools element-pick screenshot of that
-      // section once it has live data to inspect - same method used for
-      // the BIN price selectors).
+      // FIXED (v9): confirmed via DevTools element-picker that these
+      // sections use a real <h3>"Recent Sales"</h3> / <h3>"Live Auctions"</h3>
+      // heading followed by an actual <table>. Walking to the nearest
+      // following table (instead of v6's crude "grab next N lines of text")
+      // gives clean structured rows instead of noise.
+      function extractTableAfterHeading(headingText) {
+        const headings = Array.from(document.querySelectorAll('h3'));
+        const heading = headings.find(h => h.textContent.trim() === headingText);
+        if (!heading) return [];
+
+        let el = heading.nextElementSibling;
+        let table = null;
+        let hops = 0;
+        while (el && hops < 5) {
+          table = el.querySelector ? el.querySelector('table') : (el.tagName === 'TABLE' ? el : null);
+          if (table) break;
+          el = el.nextElementSibling;
+          hops++;
+        }
+        if (!table) return [];
+
+        return Array.from(table.querySelectorAll('tbody tr')).map(tr =>
+          Array.from(tr.querySelectorAll('td')).map(td => td.textContent.trim())
+        );
+      }
+
+      // Recent Sales: [timeSoldAgo, price] per row
+      const recentSalesRowsRaw = extractTableAfterHeading('Recent Sales');
+      const recentSalesRaw = recentSalesRowsRaw.length
+        ? recentSalesRowsRaw.map(([timeAgo, price]) => ({ timeAgo, price: num(price) }))
+        : null;
+
+      // Live Auctions: [ending, startBid, bin] per row - a SNAPSHOT of
+      // currently active auctions (supply depth), not literally a
+      // "listings created per hour" flow rate - useful as a liquidity
+      // proxy but conceptually distinct, noted in mergePrices.js.
+      const liveAuctionsRowsRaw = extractTableAfterHeading('Live Auctions');
+      const liveAuctionsRaw = liveAuctionsRowsRaw.length
+        ? liveAuctionsRowsRaw.map(([ending, startBid, bin]) => ({ ending, startBid: num(startBid), bin: num(bin) }))
+        : null;
 
       return {
         lowestBin,
@@ -88,8 +121,8 @@ async function scrape(playerName, url) {
         priceMomentum: momentumMatch
           ? { lowest: num(momentumMatch[1]), average: num(momentumMatch[2]), highest: num(momentumMatch[3]) }
           : null,
-        recentSalesRaw: null, // disabled, see comment above
-        liveAuctionsRaw: null, // disabled, see comment above
+        recentSalesRaw,
+        liveAuctionsRaw,
       };
     });
 

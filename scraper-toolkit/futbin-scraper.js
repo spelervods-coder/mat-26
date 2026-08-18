@@ -118,4 +118,129 @@ async function scrape(playerName, rawUrl) {
   }
 }
 
-module.exports = { scrape };
+
+
+/**
+ * Sales history from the dedicated FUTBIN sales page (richer than the
+ * "Latest Sales" mini-list on the market page - has EA tax breakdown AND
+ * a TYPE classification per sale).
+ *
+ * TYPE classification, confirmed via DevTools element-picker on the icon
+ * in the TYPE column:
+ * - SOLD FOR === 0 -> "expired" (listing ended with no buyer - most
+ *   reliable signal, doesn't depend on guessing an icon class)
+ * - icon class contains "bin-icon" -> "bin" (Buy Now purchase, tooltip
+ *   confirmed: "Buy Now")
+ * - otherwise (plain checkmark, "positive-color") -> "bid" (won via
+ *   auction bid, not an instant BIN purchase)
+ *
+ * This bid/bin/expired split matters for order-flow modeling (Cont,
+ * Stoikov & Talreja 2010 style hazard-rate approaches distinguish market
+ * or "taker" fills - BIN - from limit/auction fills - bids).
+ */
+// Accepts the same market URL used by scrape() - derives the FUTBIN id
+// and slug from it via regex, staying consistent with the URL-based
+// players.json schema (no separate id/slug fields needed).
+async function scrapeSalesHistory(playerName, marketUrl) {
+  console.log(`  📊 FUTBIN: Scraping sales history for "${playerName}"...`);
+
+  const idMatch = marketUrl.match(/\/player\/(\d+)\/([a-z0-9\-]+)/i);
+  if (!idMatch) {
+    console.error(`    ❌ FUTBIN sales history: could not parse id/slug from URL: ${marketUrl}`);
+    return null;
+  }
+  const [, futbinId, slug] = idMatch;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: process.env.HEADLESS !== 'false',
+      executablePath: process.env.CHROME_PATH || undefined,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    const url = `https://www.futbin.com/26/sales/${futbinId}/${slug}?platform=ps`;
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+    await page.waitForFunction(() => document.body.innerText.includes('Player Sales History'), { timeout: 15000 });
+
+    const rows = await page.evaluate(() => {
+      const num = (t) => {
+        if (!t) return null;
+        const n = parseInt(t.replace(/[^\d]/g, ''), 10);
+        return isNaN(n) ? null : n;
+      };
+
+      const tableRows = Array.from(document.querySelectorAll('table tr'))
+        .filter(tr => tr.querySelectorAll('td').length >= 5);
+
+      return tableRows.map(tr => {
+        const cells = Array.from(tr.querySelectorAll('td'));
+        const date = cells[0]?.textContent.trim() || null;
+        const listedFor = num(cells[1]?.textContent);
+        const soldFor = num(cells[2]?.textContent);
+        const eaTax = num(cells[3]?.textContent);
+        const netPrice = num(cells[4]?.textContent);
+        const iconEl = cells[5]?.querySelector('i');
+        const iconClass = iconEl?.className || '';
+
+        let type;
+        if (!soldFor || soldFor === 0) type = 'expired';
+        else if (iconClass.includes('bin-icon')) type = 'bin';
+        else type = 'bid';
+
+        return { date, listedFor, soldFor, eaTax, netPrice, type };
+      });
+    });
+
+    // Derive sales-per-hour from the actual observed time span of this
+    // table (real data, not a guess) - parse "Aug 17, 7:21 PM" style dates
+    // relative to the current year.
+    function parseFutbinDate(str) {
+      if (!str) return null;
+      const d = new Date(`${str} ${new Date().getFullYear()}`);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    const timestamps = rows.map(r => parseFutbinDate(r.date)).filter(Boolean);
+    let salesPerHourEstimate = null;
+    if (timestamps.length >= 2) {
+      const newest = Math.max(...timestamps.map(d => d.getTime()));
+      const oldest = Math.min(...timestamps.map(d => d.getTime()));
+      const spanHours = Math.max((newest - oldest) / 3600000, 0.1);
+      const realSales = rows.filter(r => r.type !== 'expired').length;
+      salesPerHourEstimate = Math.round((realSales / spanHours) * 10) / 10;
+    }
+
+    const binCount = rows.filter(r => r.type === 'bin').length;
+    const bidCount = rows.filter(r => r.type === 'bid').length;
+    const expiredCount = rows.filter(r => r.type === 'expired').length;
+
+    const result = {
+      source: 'FUTBIN_SALES',
+      rows,
+      salesPerHourEstimate,
+      binCount,
+      bidCount,
+      expiredCount,
+      sampleSize: rows.length,
+      url,
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log(`    ✅ FUTBIN sales history: ${rows.length} rows, ~${salesPerHourEstimate ?? '?'} sales/hr (${binCount} bin, ${bidCount} bid, ${expiredCount} expired)`);
+    return result;
+
+  } catch (error) {
+    console.error(`    ❌ FUTBIN sales history Error:`, error.message);
+    throw error;
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
+module.exports = { scrape, scrapeSalesHistory };
