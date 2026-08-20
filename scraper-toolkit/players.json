@@ -1,23 +1,153 @@
 ﻿{
     "players":  [
                     {
-                        "playerName":  "Kylian MbappÃ©",
-                        "playerId":  "231747",
+                        "playerName":  "Achraf Hakimi",
+                        "playerId":  "235212",
                         "urls":  {
-                                     "futbin":  "https://www.futbin.com/26/player/40/kylian-mbappe/market",
-                                     "futgg":  "https://www.fut.gg/players/231747-kylian-mbappe/26-231747/",
-                                     "futwiz":  "https://www.futwiz.com/fc26/player/kylian-mbappe/33",
-                                     "futnext":  "https://www.futnext.com/player/kylian-mapp%C3%A9/231747"
+                                     "futbin":  "https://www.futbin.com/26/player/91/achraf-hakimi/market",
+                                     "futgg":  "https://www.fut.gg/players/235212-achraf-hakimi/26-235212/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/achraf-hakimi/47",
+                                     "futnext":  "https://www.futnext.com/player/achraf-hakimi/235212"
                                  }
                     },
                     {
-                        "playerName":  "messi",
+                        "playerName":  "Aitana Bonmatí Conca",
+                        "playerId":  "241667",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/111/aitana-bonmati-conca/market",
+                                     "futgg":  "https://www.fut.gg/players/241667-aitana-bonmati/27-241667/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/aitana-bonmati/58",
+                                     "futnext":  "https://www.futnext.com/player/aitana-bonmat%C3%AD/241667"
+                                 }
+                    },
+                    {
+                        "playerName":  "Alisson Becker",
+                        "playerId":  "212831",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/79/alisson-ramses-becker/market",
+                                     "futgg":  "https://www.fut.gg/players/212831-alisson/27-212831/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/alisson/40",
+                                     "futnext":  "https://www.futnext.com/player/alisson/212831"
+                                 }
+                    },
+                    {
+                        "playerName":  "Erling Haaland",
+                        "playerId":  "239085",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/67/erling-haaland/market",
+                                     "futgg":  "https://www.fut.gg/players/239085-erling-haaland/27-239085/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/erling-haaland/42",
+                                     "futnext":  "https://www.futnext.com/player/erling-haaland/239085"
+                                 }
+                    },
+                    {
+                        "playerName":  "Federico Valverde",
+                        "playerId":  "239053",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/56/federico-valverde/market",
+                                     "futgg":  "https://www.fut.gg/players/239053-federico-valverde/27-239053/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/federico-valverde/44",
+                                     "futnext":  "https://www.futnext.com/player/federico-valverde/239053"
+                                 }
+                    },
+                    {
+                        "playerName":  "Florian Wirtz",
+                        "playerId":  "256630",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/41/florian-wirtz/market",
+                                     "futgg":  "https://www.fut.gg/players/256630-florian-wirtz/27-256630/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/florian-wirtz/48",
+                                     "futnext":  "https://www.futnext.com/player/florian-wirtz/256630"
+                                 }
+                    },
+                    {
+                        "playerName":  "Gianluigi Donnarumma",
+                        "playerId":  "50562269",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/18941/gianluigi-donnarumma/market",
+                                     "futgg":  "https://www.fut.gg/players/230621-gianluigi-donnarumma/26-50562269/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/gianluigi-donnarumma/34",
+                                     "futnext":  "https://www.futnext.com/player/gianluigi-donnarumma/50562269"
+                                 }
+                    },
+                    {
+                        "playerName":  "Harry Kane",
+                        "playerId":  "202126",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/69/harry-kane/market",
+                                     "futgg":  "https://www.fut.gg/players/202126-harry-kane/27-202126/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/harry-kane/43",
+                                     "futnext":  "https://www.futnext.com/player/harry-kane/202126"
+                                 }
+                    },
+                    {
+                        "playerName":  "Jude Bellingham",
+                        "playerId":  "252371",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/73/jude-bellingham/market",
+                                     "futgg":  "https://www.fut.gg/players/252371-jude-bellingham/26-252371/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/jude-bellingham/41",
+                                     "futnext":  "https://www.futnext.com/player/jude-bellingham/252371"
+                                 }
+                    },
+                    {
+                        "playerName":  "Lamine Yamal",
+                        "playerId":  "277643",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/85/lamine-yamal-nasraoui-ebana/market",
+                                     "futgg":  "https://www.fut.gg/players/277643-lamine-yamal-lamine-yamal/26-277643/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/lamine-yamal/50",
+                                     "futnext":  "https://www.futnext.com/player/lamine-yamal/277643"
+                                 }
+                    },
+                    {
+                        "playerName":  "Lionel Messi",
                         "playerId":  "158023",
                         "urls":  {
-                                     "futbin":  "https://www.futbin.com/26/player/254/lionel-messi",
-                                     "futgg":  "https://www.fut.gg/players/158023-lionel-messi/26-158023/",
+                                     "futbin":  "https://www.futbin.com/26/player/254/lionel-messi/market",
+                                     "futgg":  "http://fut.gg/players/158023-lionel-messi/26-158023/",
                                      "futwiz":  "https://www.futwiz.com/fc26/player/lionel-messi/88",
-                                     "futnext":  "https://www.futnext.com/player/lionel_messi/158023"
+                                     "futnext":  "https://www.futnext.com/player/lionel-messi/158023"
+                                 }
+                    },
+                    {
+                        "playerName":  "Raphinha",
+                        "playerId":  "233419",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/83/raphael-dias-belloli/market",
+                                     "futgg":  "https://www.fut.gg/players/233419-raphinha/26-233419/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/raphinha/45",
+                                     "futnext":  "https://www.futnext.com/player/raphinha/233419"
+                                 }
+                    },
+                    {
+                        "playerName":  "Rodri",
+                        "playerId":  "231866",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/61/rodrigo-hernandez-cascante/market",
+                                     "futgg":  "https://www.fut.gg/players/231866-rodri/26-231866/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/rodri/37",
+                                     "futnext":  "https://www.futnext.com/player/rodri/231866"
+                                 }
+                    },
+                    {
+                        "playerName":  "VVD",
+                        "playerId":  "203376",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/62/virgil-van-dijk/market",
+                                     "futgg":  "https://www.fut.gg/players/203376-virgil-van-dijk/26-203376/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/virgil-van-dijk/39",
+                                     "futnext":  "https://www.futnext.com/player/virgil-van-dijk/203376"
+                                 }
+                    },
+                    {
+                        "playerName":  "Vitinha",
+                        "playerId":  "255253",
+                        "urls":  {
+                                     "futbin":  "https://www.futbin.com/26/player/68/vitor-machado-ferreira/market",
+                                     "futgg":  "https://www.fut.gg/players/255253-vitinha/26-255253/",
+                                     "futwiz":  "https://www.futwiz.com/fc26/player/vitinha/32",
+                                     "futnext":  "https://www.futnext.com/player/vitinha/255253"
                                  }
                     }
                 ]
