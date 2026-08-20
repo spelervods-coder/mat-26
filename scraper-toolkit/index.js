@@ -1,23 +1,22 @@
 /**
- * FC26 SCRAPER ORCHESTRATOR (v8)
+ * FC26 SCRAPER ORCHESTRATOR (v10)
  *
- * NEW: cardId auto-backfill. If a player was added without a cardId
- * (add-player.ps1 allows this), the first scrape derives it from FUT.GG's
- * itemId / FUTWIZ's cardId (via mergePrices.js) and writes it back into
- * players.json so subsequent runs have a stable key.
- *
- * FIXED: was keying everything on "playerId", which is NOT unique per
- * card (a player's Gold Rare, TOTW, Icon etc all share the same playerId
- * but have DIFFERENT cardIds). Now uses cardId as the canonical key, with
- * backward-compatible fallback to the old "playerId" field for entries
- * added before this fix.
+ * NEW (v10): human-in-the-loop transaction logging + pricing engine.
+ * You perform the actual buy/list/sell actions in-game; this system
+ * logs them via ONE short command each and immediately hands back the
+ * next recommended number. All engine output is a RECOMMENDATION only -
+ * nothing here touches your EA account.
  *
  * Usage:
  *   node index.js                              scrape ALL players.json entries
  *   node index.js get <cardId>                  pretty overview (from cache, auto-refresh if stale)
- *   node index.js get <cardId> --json            same, but raw JSON instead of the overview
  *   node index.js refresh <cardId>               force full refresh (all 4 sources)
- *   node index.js refresh <cardId> --source=futbin   refresh only 1 source
+ *   node index.js buy <cardId> <price>            log a purchase, get recommended sell price
+ *   node index.js list <positionId> <price>       log that you listed it
+ *   node index.js sold <positionId> <price>        log a sale, closes the position, shows profit
+ *   node index.js expired <positionId>             log an unsold expiry, get a fresh relist price
+ *   node index.js relist <positionId> <price>      log that you relisted it
+ *   node index.js positions                        dashboard: all open positions + slot count
  */
 
 require('dotenv').config();
@@ -28,6 +27,8 @@ const futbinScraper = require('./futbin-scraper');
 const futggScraper = require('./futgg-scraper');
 const futwizScraper = require('./futwiz-scraper');
 const futnextScraper = require('./futnext-scraper');
+const pricingEngine = require('./pricing-engine');
+const positionsStore = require('./positions-store');
 const { mergePrices, formatOverview } = require('./mergePrices');
 const store = require('./store');
 
@@ -269,6 +270,160 @@ async function cmdRefresh(id, { source, json, withSales = true } = {}) {
   else console.log('\n' + formatOverview(merged));
 }
 
+const MAX_RELISTS = 3;
+const ACCOUNT_BUDGET = parseInt(process.env.ACCOUNT_BUDGET || '0', 10);
+const RISK_PROFILE = process.env.RISK_PROFILE || 'standard';
+
+function shortId(positionId) {
+  return positionId.slice(0, 8);
+}
+
+function resolvePositionId(idOrPrefix) {
+  const full = positionsStore.getPosition(idOrPrefix);
+  if (full) return full;
+  return positionsStore.findPositionByPrefix(idOrPrefix);
+}
+
+// node index.js buy <cardId> <price>
+// Logs a purchase, immediately shows the recommended sell price using
+// whatever price data is currently cached (run `refresh` first if stale).
+async function cmdBuy(cardId, priceStr) {
+  const price = parseInt(priceStr, 10);
+  if (!price) { console.log('Usage: node index.js buy <cardId> <price>'); process.exit(1); }
+
+  const playerDef = findPlayerDef(cardId);
+  if (!playerDef) { console.log(`❌ cardId ${cardId} not found in players.json`); process.exit(1); }
+
+  const position = positionsStore.createPosition(cardId, playerDef.playerName, price);
+  console.log(`\n✅ BUY gelogd: ${playerDef.playerName} voor ${price}`);
+  console.log(`   Position ID: ${position.positionId}  (kort: ${shortId(position.positionId)})`);
+
+  const cached = store.getEntry(cardId);
+  const activeSlots = positionsStore.countActiveSlots();
+  const inventoryQ = positionsStore.countPositionsForCard(cardId);
+
+  if (cached?.merged) {
+    const rec = pricingEngine.recommendPrices(cached.merged, {
+      riskProfile: RISK_PROFILE, activeSlots, inventoryQ,
+    });
+    if (rec) {
+      const tos = pricingEngine.calculateTOS(cached.merged);
+      console.log(`\n💡 Aanbevolen verkoopprijs: ${rec.sellPrice}`);
+      console.log(`   Verwachte winst: ${rec.expectedProfit}  |  ROI: ${rec.expectedRoiPct}%  |  TOS: ${tos.tos}/10`);
+      console.log(`   Actieve slots: ${activeSlots}/100  |  Van dit kaarttype: ${inventoryQ}`);
+    }
+  } else {
+    console.log(`⚠️  Geen prijsdata in cache - run eerst: node index.js refresh ${cardId}`);
+  }
+
+  console.log(`\nVolgende stap: node index.js list ${shortId(position.positionId)} <prijs>`);
+}
+
+// node index.js list <positionId> <price>
+async function cmdList(idOrPrefix, priceStr) {
+  const price = parseInt(priceStr, 10);
+  const pos = resolvePositionId(idOrPrefix);
+  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+
+  positionsStore.addEvent(pos.positionId, { action: 'list', price, listDurationMin: 60 });
+  console.log(`✅ LIST gelogd: ${pos.playerName} voor ${price} (60 min)`);
+  console.log(`Volgende stap: node index.js sold ${shortId(pos.positionId)} <prijs>  of  node index.js expired ${shortId(pos.positionId)}`);
+}
+
+// node index.js sold <positionId> <price>
+async function cmdSold(idOrPrefix, priceStr) {
+  const price = parseInt(priceStr, 10);
+  const pos = resolvePositionId(idOrPrefix);
+  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+
+  const netPrice = Math.round(price * (1 - pricingEngine.EA_TAX));
+  const updated = positionsStore.addEvent(pos.positionId, { action: 'sold', price, netPrice });
+  console.log(`✅ SOLD gelogd: ${updated.playerName} voor ${price} (netto ${netPrice})`);
+  console.log(`💰 Winst: ${updated.finalProfit >= 0 ? '+' : ''}${updated.finalProfit}`);
+}
+
+// node index.js expired <positionId>
+// Logs the expiry, checks relist count vs max, then re-scrapes fresh
+// data and recommends a NEW relist price (not a fixed decrement).
+async function cmdExpired(idOrPrefix) {
+  const pos = resolvePositionId(idOrPrefix);
+  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+
+  const updated = positionsStore.addEvent(pos.positionId, { action: 'expire' });
+  console.log(`⏰ EXPIRE gelogd: ${updated.playerName}`);
+  console.log(`   Let op: EA plaatst dit NIET automatisch terug in je club - blijft een slot bezetten tot je 'm ophaalt.`);
+
+  if (updated.relistCount >= MAX_RELISTS) {
+    positionsStore.addEvent(pos.positionId, { action: 'stuck' });
+    console.log(`🔴 Max relists (${MAX_RELISTS}) bereikt - gemarkeerd als STUCK. Handmatige review nodig.`);
+    return;
+  }
+
+  const playerDef = findPlayerDef(updated.cardId);
+  if (!playerDef) {
+    console.log(`⚠️  cardId ${updated.cardId} niet meer in players.json - kan geen verse relist-prijs berekenen.`);
+    return;
+  }
+
+  console.log('   Verse data ophalen voor relist-advies...');
+  const fresh = await scrapePlayerFull(playerDef, { withSales: true });
+  storeAndLog(playerDef, fresh);
+
+  const lastListEvent = [...updated.events].reverse().find(e => e.action === 'list' || e.action === 'relist');
+  const activeSlots = positionsStore.countActiveSlots();
+  const inventoryQ = positionsStore.countPositionsForCard(updated.cardId);
+  const rec = pricingEngine.recommendRelistPrice(fresh.merged, lastListEvent.price, {
+    riskProfile: RISK_PROFILE, activeSlots, inventoryQ,
+  });
+
+  if (rec) {
+    console.log(`\n💡 Nieuwe relist-prijs: ${rec.sellPrice} (was ${lastListEvent.price}${rec.wasCapped ? ', afgetopt op max 15% stap' : ''})`);
+    console.log(`Volgende stap: node index.js relist ${shortId(pos.positionId)} ${rec.sellPrice}`);
+  }
+}
+
+// node index.js relist <positionId> <price>
+async function cmdRelist(idOrPrefix, priceStr) {
+  const price = parseInt(priceStr, 10);
+  const pos = resolvePositionId(idOrPrefix);
+  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+
+  const updated = positionsStore.addEvent(pos.positionId, { action: 'relist', price, listDurationMin: 60 });
+  console.log(`✅ RELIST #${updated.relistCount} gelogd: ${updated.playerName} voor ${price}`);
+  console.log(`Volgende stap: node index.js sold ${shortId(pos.positionId)} <prijs>  of  node index.js expired ${shortId(pos.positionId)}`);
+}
+
+// node index.js positions - dashboard
+async function cmdPositionsDashboard() {
+  const open = positionsStore.getOpenPositions();
+  const activeSlots = positionsStore.countActiveSlots();
+  const pressure = pricingEngine.slotPressureMultiplier(activeSlots);
+
+  console.log(`\n━━━ Positie-dashboard ━━━`);
+  console.log(`Actieve transferlijst-slots: ${activeSlots}/100  (marge-druk-factor: ${Math.round(pressure * 100)}%)`);
+
+  if (!open.length) {
+    console.log('\nGeen open posities.');
+  } else {
+    console.log('');
+    open.forEach(p => {
+      const lastEvent = p.events[p.events.length - 1];
+      console.log(`  [${shortId(p.positionId)}] ${p.playerName} — laatste actie: ${lastEvent.action}${lastEvent.price ? ` (${lastEvent.price})` : ''} — relists: ${p.relistCount}`);
+    });
+  }
+
+  const all = positionsStore.getAllPositions();
+  const closed = all.filter(p => p.status === 'closed');
+  const stuck = all.filter(p => p.status === 'stuck');
+  if (closed.length) {
+    const totalProfit = closed.reduce((sum, p) => sum + (p.finalProfit || 0), 0);
+    console.log(`\nAfgesloten posities: ${closed.length}  |  Totale winst: ${totalProfit >= 0 ? '+' : ''}${totalProfit}`);
+  }
+  if (stuck.length) {
+    console.log(`⚠️  Stuck posities: ${stuck.length} — review nodig`);
+  }
+}
+
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
   const flags = {};
@@ -299,6 +454,23 @@ function parseArgs(argv) {
       process.exit(1);
     }
     await cmdRefresh(positional[0], { source: flags.source, json: !!flags.json, withSales });
+  } else if (cmd === 'buy') {
+    if (!positional[0] || !positional[1]) { console.log('Usage: node index.js buy <cardId> <price>'); process.exit(1); }
+    await cmdBuy(positional[0], positional[1]);
+  } else if (cmd === 'list') {
+    if (!positional[0] || !positional[1]) { console.log('Usage: node index.js list <positionId> <price>'); process.exit(1); }
+    await cmdList(positional[0], positional[1]);
+  } else if (cmd === 'sold') {
+    if (!positional[0] || !positional[1]) { console.log('Usage: node index.js sold <positionId> <price>'); process.exit(1); }
+    await cmdSold(positional[0], positional[1]);
+  } else if (cmd === 'expired') {
+    if (!positional[0]) { console.log('Usage: node index.js expired <positionId>'); process.exit(1); }
+    await cmdExpired(positional[0]);
+  } else if (cmd === 'relist') {
+    if (!positional[0] || !positional[1]) { console.log('Usage: node index.js relist <positionId> <price>'); process.exit(1); }
+    await cmdRelist(positional[0], positional[1]);
+  } else if (cmd === 'positions') {
+    await cmdPositionsDashboard();
   } else {
     console.log('Usage:');
     console.log('  node index.js [--prices-only]                 scrape all players.json entries');
@@ -307,6 +479,14 @@ function parseArgs(argv) {
     console.log('  node index.js refresh <cardId> [--json]       force full refresh (all 4 sources + sales history)');
     console.log('  node index.js refresh <cardId> --prices-only   force refresh, skip sales history (faster)');
     console.log('  node index.js refresh <cardId> --source=futbin   refresh only 1 source, keep rest cached');
+    console.log('');
+    console.log('  --- transactie-logging (human-in-the-loop) ---');
+    console.log('  node index.js buy <cardId> <price>             log aankoop, krijg aanbevolen verkoopprijs');
+    console.log('  node index.js list <positionId> <price>        log dat je gelist hebt');
+    console.log('  node index.js sold <positionId> <price>        log verkoop, sluit positie, toont winst');
+    console.log('  node index.js expired <positionId>              log niet-verkocht, krijg verse relist-prijs');
+    console.log('  node index.js relist <positionId> <price>      log relist');
+    console.log('  node index.js positions                        dashboard: alle open posities + slot-telling');
   }
 
   process.exit(0);

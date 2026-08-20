@@ -222,9 +222,9 @@ async function scrapeSalesHistory(playerName, marketUrl) {
       });
     });
 
-    // Derive sales-per-hour from the actual observed time span of this
-    // table (real data, not a guess) - parse "Aug 17, 7:21 PM" style dates
-    // relative to the current year.
+    // Derive rates from the actual observed time span of this table (real
+    // data, not a guess) - parse "Aug 17, 7:21 PM" style dates relative
+    // to the current year.
     function parseFutbinDate(str) {
       if (!str) return null;
       const d = new Date(`${str} ${new Date().getFullYear()}`);
@@ -233,12 +233,17 @@ async function scrapeSalesHistory(playerName, marketUrl) {
 
     const timestamps = rows.map(r => parseFutbinDate(r.date)).filter(Boolean);
     let salesPerHourEstimate = null;
+    let listingsPerHourEstimate = null;
     if (timestamps.length >= 2) {
       const newest = Math.max(...timestamps.map(d => d.getTime()));
       const oldest = Math.min(...timestamps.map(d => d.getTime()));
       const spanHours = Math.max((newest - oldest) / 3600000, 0.1);
       const realSales = rows.filter(r => r.type !== 'expired').length;
       salesPerHourEstimate = Math.round((realSales / spanHours) * 10) / 10;
+      // NEW: listings/hour = ALL resolved rows (sold + expired) in this
+      // same table - this table already gives us both sides (sales AND
+      // listings), no need for FUT.GG's Live Auctions snapshot for this.
+      listingsPerHourEstimate = Math.round((rows.length / spanHours) * 10) / 10;
     }
 
     const binCount = rows.filter(r => r.type === 'bin').length;
@@ -250,6 +255,7 @@ async function scrapeSalesHistory(playerName, marketUrl) {
       source: 'FUTBIN_SALES',
       rows,
       salesPerHourEstimate,
+      listingsPerHourEstimate,
       binCount,
       bidCount,
       expiredCount,
@@ -259,7 +265,7 @@ async function scrapeSalesHistory(playerName, marketUrl) {
       timestamp: new Date().toISOString(),
     };
 
-    console.log(`    ✅ FUTBIN sales history: ${rows.length} rows, ~${salesPerHourEstimate ?? '?'} sales/hr (${binCount} bin, ${bidCount} bid, ${expiredCount} expired, ${unknownCount} unknown)`);
+    console.log(`    ✅ FUTBIN sales history: ${rows.length} rows, ~${salesPerHourEstimate ?? '?'} sales/hr, ~${listingsPerHourEstimate ?? '?'} listings/hr (${binCount} bin, ${bidCount} bid, ${expiredCount} expired, ${unknownCount} unknown)`);
     if (unknownCount > 0) {
       console.log(`    ℹ️  ${unknownCount} row(s) had an unrecognized TYPE icon - raw classes logged in the "unknown" rows for verification:`);
       rows.filter(r => r.type === 'unknown').slice(0, 3).forEach(r => console.log(`       outcome="${r.outcome}" method="${r.method}" soldFor=${r.soldFor}`));

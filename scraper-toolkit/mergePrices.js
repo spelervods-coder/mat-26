@@ -64,19 +64,22 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
   const versionCheck = checkVersionAgreement(futbinData?.cardVersion, futggData?.cardVersion, futwizData?.cardVersion, futnextData?.cardVersion);
 
   // Liquidity metrics for the pricing model (Cont/Stoikov/Talreja-style
-  // order-flow inputs). salesPerHour comes from FUTBIN's real sales
-  // history (bid/bin/expired classified). listingsSnapshot comes from
-  // FUT.GG's Live Auctions table - a SUPPLY DEPTH snapshot (how many
-  // active auctions right now), not literally a "listings created per
-  // hour" flow rate - related but distinct, treated as a proxy.
+  // order-flow inputs). FIXED: both salesPerHour AND listingsPerHour now
+  // come from the SAME source (FUTBIN's sales-history table already
+  // contains every resolved listing - sold AND expired - so we don't
+  // need FUT.GG's Live Auctions as a mismatched proxy anymore). This is
+  // more consistent than mixing two different sites/timeframes.
   const salesPerHourEstimate = futbinSalesData?.salesPerHourEstimate ?? null;
-  const activeListingsSnapshot = futggData?.liveAuctionsRaw?.length ?? null;
-  const liquidityRatio = (salesPerHourEstimate !== null && activeListingsSnapshot)
-    ? Math.round((salesPerHourEstimate / activeListingsSnapshot) * 100) / 100
+  const listingsPerHourEstimate = futbinSalesData?.listingsPerHourEstimate ?? null;
+  const marketLiquidityRatio = (salesPerHourEstimate !== null && listingsPerHourEstimate)
+    ? Math.round((salesPerHourEstimate / listingsPerHourEstimate) * 100) / 100
     : null;
   const bidBinBreakdown = futbinSalesData
     ? { bin: futbinSalesData.binCount, bid: futbinSalesData.bidCount, expired: futbinSalesData.expiredCount, sampleSize: futbinSalesData.sampleSize }
     : null;
+  // FUT.GG Live Auctions kept SEPARATE - advisory only ("these auctions
+  // look interesting"), never used as an engine input (see report §3).
+  const activeAuctionsSnapshot = futggData?.liveAuctionsRaw ?? null;
 
   return {
     playerName,
@@ -99,11 +102,11 @@ function mergePrices({ playerName, futbinData, futggData, futwizData, futnextDat
     },
     merged: {
       salesPerHourEstimate,
-      activeListingsSnapshot,
-      liquidityRatio,
+      listingsPerHourEstimate,
+      marketLiquidityRatio,
       bidBinBreakdown,
+      activeAuctionsSnapshot, // advisory only, see comment above
       recentSalesFutggStructured: futggData?.recentSalesRaw ?? null,
-      liveAuctionsFutggStructured: futggData?.liveAuctionsRaw ?? null,
       binPrices,
       lowestAcrossSources,
       averageBinPrice: calculateAverage(Object.values(binPrices)),
@@ -142,11 +145,11 @@ function formatOverview(merged) {
   if (m.salesPerHourEstimate !== null) {
     lines.push(`  Sales/hr (FUTBIN, real): ~${m.salesPerHourEstimate}`);
   }
-  if (m.activeListingsSnapshot !== null) {
-    lines.push(`  Active listings snapshot (FUT.GG): ${m.activeListingsSnapshot}`);
+  if (m.listingsPerHourEstimate !== null) {
+    lines.push(`  Listings/hr (FUTBIN, real): ~${m.listingsPerHourEstimate}`);
   }
-  if (m.liquidityRatio !== null) {
-    lines.push(`  Liquidity ratio (sales/listings): ${m.liquidityRatio}`);
+  if (m.marketLiquidityRatio !== null) {
+    lines.push(`  Market liquidity ratio (sales/listings): ${m.marketLiquidityRatio}`);
   }
   if (m.bidBinBreakdown) {
     const b = m.bidBinBreakdown;
