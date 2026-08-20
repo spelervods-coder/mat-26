@@ -180,20 +180,45 @@ async function scrapeSalesHistory(playerName, marketUrl) {
 
       return tableRows.map(tr => {
         const cells = Array.from(tr.querySelectorAll('td'));
-        const date = cells[0]?.textContent.trim() || null;
+
+        // CONFIRMED via DevTools (Aug 2026): the first <td> contains BOTH
+        // an outcome icon AND the date text together, e.g.:
+        //   <td><div class="xxs-row align-center">
+        //     <i class="fa fa-times-circle negative-color"></i>
+        //     <span class="sales-date-time">Aug 18, 6:49 AM</span>
+        //   </div></td>
+        // Outcome icon: fa-check/positive-color = won, fa-times-circle/
+        // negative-color = lost/expired.
+        const dateCell = cells[0];
+        const outcomeIconEl = dateCell?.querySelector('i');
+        const outcomeClass = outcomeIconEl?.className || '';
+        const outcome = /times-circle|negative-color/.test(outcomeClass)
+          ? 'expired'
+          : (/check|positive-color/.test(outcomeClass) ? 'won' : 'unknown');
+        const date = dateCell?.querySelector('.sales-date-time')?.textContent.trim()
+          || dateCell?.textContent.trim() || null;
+
         const listedFor = num(cells[1]?.textContent);
         const soldFor = num(cells[2]?.textContent);
         const eaTax = num(cells[3]?.textContent);
         const netPrice = num(cells[4]?.textContent);
-        const iconEl = cells[5]?.querySelector('i');
-        const iconClass = iconEl?.className || '';
+
+        // Last <td> = TYPE column: fa-bullseye-arrow/bin-icon = Buy Now,
+        // fa-gavel/bid-icon = Bid. Only meaningful when outcome === 'won'
+        // (an expired/unsold row has no purchase method).
+        const typeIconEl = cells[5]?.querySelector('i');
+        const typeClass = typeIconEl?.className || '';
+        let method = null;
+        if (/bullseye/i.test(typeClass)) method = 'bin';
+        else if (/gavel|hammer/i.test(typeClass)) method = 'bid';
 
         let type;
-        if (!soldFor || soldFor === 0) type = 'expired';
-        else if (iconClass.includes('bin-icon')) type = 'bin';
-        else type = 'bid';
+        if (outcome === 'expired' || !soldFor || soldFor === 0) type = 'expired';
+        else if (method === 'bin') type = 'bin';
+        else if (method === 'bid') type = 'bid';
+        else type = 'unknown'; // won, but method icon not recognized - safety net, should be rare now
 
-        return { date, listedFor, soldFor, eaTax, netPrice, type };
+        return { date, listedFor, soldFor, eaTax, netPrice, type, outcome, method };
       });
     });
 
@@ -219,6 +244,7 @@ async function scrapeSalesHistory(playerName, marketUrl) {
     const binCount = rows.filter(r => r.type === 'bin').length;
     const bidCount = rows.filter(r => r.type === 'bid').length;
     const expiredCount = rows.filter(r => r.type === 'expired').length;
+    const unknownCount = rows.filter(r => r.type === 'unknown').length;
 
     const result = {
       source: 'FUTBIN_SALES',
@@ -227,12 +253,17 @@ async function scrapeSalesHistory(playerName, marketUrl) {
       binCount,
       bidCount,
       expiredCount,
+      unknownCount,
       sampleSize: rows.length,
       url,
       timestamp: new Date().toISOString(),
     };
 
-    console.log(`    ✅ FUTBIN sales history: ${rows.length} rows, ~${salesPerHourEstimate ?? '?'} sales/hr (${binCount} bin, ${bidCount} bid, ${expiredCount} expired)`);
+    console.log(`    ✅ FUTBIN sales history: ${rows.length} rows, ~${salesPerHourEstimate ?? '?'} sales/hr (${binCount} bin, ${bidCount} bid, ${expiredCount} expired, ${unknownCount} unknown)`);
+    if (unknownCount > 0) {
+      console.log(`    ℹ️  ${unknownCount} row(s) had an unrecognized TYPE icon - raw classes logged in the "unknown" rows for verification:`);
+      rows.filter(r => r.type === 'unknown').slice(0, 3).forEach(r => console.log(`       outcome="${r.outcome}" method="${r.method}" soldFor=${r.soldFor}`));
+    }
     return result;
 
   } catch (error) {

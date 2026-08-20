@@ -130,9 +130,13 @@ async function timedScrapeSource(source, playerName, url, timing) {
 
 // Pure scrape+merge - no store/log side effects (those happen in the
 // callers below, AFTER cardId backfill is resolved).
-async function scrapePlayerFull(playerDef) {
+//
+// withSales=false skips the extra FUTBIN sales-history page load
+// (--prices-only mode) - faster, but no salesPerHourEstimate/
+// bidBinBreakdown for that run.
+async function scrapePlayerFull(playerDef, { withSales = true } = {}) {
   const { playerName, urls } = playerDef;
-  console.log(`\n🔍 Scraping all sources for: ${playerName}`);
+  console.log(`\n🔍 Scraping all sources for: ${playerName}${withSales ? '' : ' (prices only)'}`);
 
   const overallStart = Date.now();
   const timing = {};
@@ -142,6 +146,7 @@ async function scrapePlayerFull(playerDef) {
   // after - same pattern as timedScrapeSource, just a different scraper
   // function. Gives real bid/bin/expired classified transaction data.
   async function timedScrapeSalesHistory() {
+    if (!withSales) return null;
     const start = Date.now();
     let result = null;
     try {
@@ -188,12 +193,12 @@ function storeAndLog(playerDef, merged) {
   logPriceSnapshot(id, playerDef.playerName, merged);
 }
 
-async function cmdScrapeAll() {
+async function cmdScrapeAll({ withSales = true } = {}) {
   const players = loadPlayersConfig();
   const results = [];
 
   for (const playerDef of players) {
-    const merged = await scrapePlayerFull(playerDef);
+    const merged = await scrapePlayerFull(playerDef, { withSales });
     console.log('\n' + formatOverview(merged));
     if (merged) {
       results.push(merged);
@@ -223,7 +228,7 @@ async function cmdGet(id, { json }) {
   await cmdRefresh(id, { json });
 }
 
-async function cmdRefresh(id, { source, json } = {}) {
+async function cmdRefresh(id, { source, json, withSales = true } = {}) {
   const playerDef = findPlayerDef(id);
   if (!playerDef) {
     console.log(`❌ cardId ${id} not found in players.json`);
@@ -233,7 +238,7 @@ async function cmdRefresh(id, { source, json } = {}) {
   let merged;
 
   if (!source) {
-    merged = await scrapePlayerFull(playerDef);
+    merged = await scrapePlayerFull(playerDef, { withSales });
   } else {
     if (!SCRAPERS[source]) {
       console.log(`❌ Unknown source "${source}". Use one of: futbin, futgg, futwiz, futnext`);
@@ -281,24 +286,27 @@ function parseArgs(argv) {
 
 (async () => {
   const { cmd, positional, flags } = parseArgs(process.argv.slice(2));
+  const withSales = !flags['prices-only'];
 
   if (!cmd || cmd === 'scrape-all') {
-    await cmdScrapeAll();
+    await cmdScrapeAll({ withSales });
   } else if (cmd === 'get') {
     if (!positional[0]) { console.log('Usage: node index.js get <cardId> [--json]'); process.exit(1); }
     await cmdGet(positional[0], { json: !!flags.json });
   } else if (cmd === 'refresh') {
     if (!positional[0]) {
-      console.log('Usage: node index.js refresh <cardId> [--source=futbin] [--json]');
+      console.log('Usage: node index.js refresh <cardId> [--source=futbin] [--prices-only] [--json]');
       process.exit(1);
     }
-    await cmdRefresh(positional[0], { source: flags.source, json: !!flags.json });
+    await cmdRefresh(positional[0], { source: flags.source, json: !!flags.json, withSales });
   } else {
     console.log('Usage:');
-    console.log('  node index.js                                scrape all players.json entries');
+    console.log('  node index.js [--prices-only]                 scrape all players.json entries');
+    console.log('                                                 (--prices-only skips FUTBIN sales history, faster)');
     console.log('  node index.js get <cardId> [--json]           overview from cache, auto-refresh if stale');
-    console.log('  node index.js refresh <cardId> [--json]       force full refresh (all 4 sources)');
-    console.log('  node index.js refresh <cardId> --source=futbin   refresh only 1 source');
+    console.log('  node index.js refresh <cardId> [--json]       force full refresh (all 4 sources + sales history)');
+    console.log('  node index.js refresh <cardId> --prices-only   force refresh, skip sales history (faster)');
+    console.log('  node index.js refresh <cardId> --source=futbin   refresh only 1 source, keep rest cached');
   }
 
   process.exit(0);

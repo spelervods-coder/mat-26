@@ -32,8 +32,31 @@ function getEntry(playerId) {
   return db[playerId] || null;
 }
 
+// Fields that don't change over time (rating, club, nation, cardVersion).
+// If a scrape fails to extract one of these (e.g. a site's layout changed
+// and the selector broke), we don't want that null to silently overwrite
+// a previously-known-good value. "static if missing" - automatic, no
+// flag needed: every scrape still re-fetches the full page (no time
+// saved), but a bad/failed extraction can't corrupt data we already had.
+const STATIC_FIELDS = ['rating', 'position', 'club', 'nation'];
+
 function upsertEntry(playerId, mergedData) {
   const db = loadDb();
+  const previous = db[playerId];
+
+  if (previous?.merged && mergedData?.merged) {
+    for (const field of STATIC_FIELDS) {
+      const isMissing = mergedData.merged[field] === null || mergedData.merged[field] === undefined;
+      const hadValue = previous.merged[field] !== null && previous.merged[field] !== undefined;
+      if (isMissing && hadValue) {
+        mergedData.merged[field] = previous.merged[field];
+      }
+    }
+    if (!mergedData.cardVersion && previous.cardVersion) {
+      mergedData.cardVersion = previous.cardVersion;
+    }
+  }
+
   db[playerId] = {
     ...mergedData,
     storedAt: new Date().toISOString(),
