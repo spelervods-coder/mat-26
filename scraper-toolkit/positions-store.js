@@ -105,7 +105,24 @@ function findPositionByPrefix(idPrefix) {
   return match ? positions[match] : null;
 }
 
+// FIFO resolver: cards of the same cardId are fungible (EA doesn't track
+// which literal instance you sell) - so when acting "on a cardId" rather
+// than a specific positionId, pick the OLDEST open position that's
+// currently in one of the allowed states for this action. E.g. you can't
+// "sell" a position that hasn't been listed yet.
+function findOldestOpenPositionForCard(cardId, allowedLastActions) {
+  const candidates = getOpenPositions().filter(p => {
+    if (String(p.cardId) !== String(cardId)) return false;
+    const lastEvent = p.events[p.events.length - 1];
+    return allowedLastActions.includes(lastEvent.action);
+  });
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => new Date(a.events[0].timestamp) - new Date(b.events[0].timestamp));
+  return candidates[0];
+}
+
 module.exports = {
   createPosition, addEvent, getPosition, getAllPositions, getOpenPositions,
-  countActiveSlots, countPositionsForCard, findPositionByPrefix, POSITIONS_FILE,
+  countActiveSlots, countPositionsForCard, findPositionByPrefix,
+  findOldestOpenPositionForCard, POSITIONS_FILE,
 };

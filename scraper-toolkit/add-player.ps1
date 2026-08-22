@@ -1,9 +1,11 @@
 # add-player.ps1
-# Interactive helper: paste the 4 URLs (+ name + playerId) for ONE player,
-# appends a correctly-formatted entry to players.json. Run once per player.
+# Interactive helper: paste the 4 URLs (+ optional name + cardId) for ONE
+# player, appends a correctly-formatted entry to players.json.
 #
-# playerId = the EA official ID - the number that appears in BOTH the
-# fut.gg URL (.../26-231747/) and the futnext URL (.../231747)
+# cardId = the CARD-specific ID (FUT.GG's itemId, or FUTWIZ's Card ID) -
+# NOT the same across a player's different versions (Gold Rare vs TOTW vs
+# Icon all have DIFFERENT cardIds, even for the same person). This is what
+# uniquely identifies the exact card you want to track.
 
 $ErrorActionPreference = "Stop"
 
@@ -13,18 +15,29 @@ if (-not (Test-Path ".\players.json")) {
 }
 
 Write-Host "--- Add a new player ---" -ForegroundColor Cyan
-$playerName = Read-Host "Player name (e.g. Kylian Mbappe)"
-$playerId   = Read-Host "Player ID (from fut.gg or futnext URL)"
 $futbinUrl  = Read-Host "FUTBIN URL"
 $futggUrl   = Read-Host "FUT.GG URL"
 $futwizUrl  = Read-Host "FUTWIZ URL"
 $futnextUrl = Read-Host "FutNext URL"
+$cardId     = Read-Host "Card ID (from fut.gg itemId / futwiz Card ID - blank = auto-fill on first scrape)"
+$playerName = Read-Host "Player name (blank = guessed from FUTBIN URL)"
+
+if (-not $playerName) {
+  # crude auto-derive from URL slug: .../player/40/kylian-mbappe/... -> "Kylian Mbappe"
+  if ($futbinUrl -match '/player/\d+/([a-z0-9\-]+)') {
+    $slug = $Matches[1]
+    $playerName = ($slug -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join ' '
+    Write-Host "  (guessed name: $playerName)" -ForegroundColor Yellow
+  } else {
+    $playerName = "Unknown"
+  }
+}
 
 $json = Get-Content ".\players.json" -Raw | ConvertFrom-Json
 
 $newPlayer = [PSCustomObject]@{
   playerName = $playerName
-  playerId   = $playerId
+  cardId     = $cardId
   urls       = [PSCustomObject]@{
     futbin  = $futbinUrl
     futgg   = $futggUrl
@@ -33,13 +46,19 @@ $newPlayer = [PSCustomObject]@{
   }
 }
 
-$existingIds = $json.players | ForEach-Object { $_.playerId }
-if ($existingIds -contains $playerId) {
-  Write-Host "WARNING: playerId $playerId already exists in players.json - adding anyway (you may want to remove the duplicate manually)." -ForegroundColor Yellow
+if ($cardId) {
+  $existingIds = $json.players | ForEach-Object { $_.cardId }
+  if ($existingIds -contains $cardId) {
+    Write-Host "WARNING: cardId $cardId already exists in players.json." -ForegroundColor Yellow
+  }
 }
 
 $json.players = @($json.players) + $newPlayer
-$json | ConvertTo-Json -Depth 10 | Set-Content ".\players.json" -Encoding UTF8
+$jsonText = $json | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText((Resolve-Path ".\players.json"), $jsonText, (New-Object System.Text.UTF8Encoding $false))
 
-Write-Host "`nAdded $playerName (id=$playerId). Total players: $($json.players.Count)" -ForegroundColor Green
+Write-Host "`nAdded $playerName. Total players: $($json.players.Count)" -ForegroundColor Green
+if (-not $cardId) {
+  Write-Host "No cardId given - it will be filled in automatically the first time this player is scraped (via 'node index.js')." -ForegroundColor Yellow
+}
 Write-Host "Run .\add-player.ps1 again for the next player." -ForegroundColor Yellow

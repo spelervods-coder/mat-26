@@ -14,14 +14,15 @@ function Load-Players {
 }
 
 function Save-Players($json) {
-  $json | ConvertTo-Json -Depth 10 | Set-Content ".\players.json" -Encoding UTF8
+  $jsonText = $json | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText((Resolve-Path ".\players.json"), $jsonText, (New-Object System.Text.UTF8Encoding $false))
 }
 
 function List-Players($json) {
   Write-Host ""
   $i = 0
   foreach ($p in $json.players) {
-    Write-Host "[$i] $($p.playerName) (id=$($p.playerId))"
+    Write-Host "[$i] $($p.playerName) (id=$($p.cardId))"
     $i++
   }
   Write-Host ""
@@ -30,7 +31,7 @@ function List-Players($json) {
 function Add-PlayerInteractive($json) {
   Write-Host "--- Add player ---" -ForegroundColor Cyan
   $playerName = Read-Host "Player name"
-  $playerId   = Read-Host "Player ID (from fut.gg or futnext URL)"
+  $cardId   = Read-Host "Card ID (fut.gg itemId / futwiz Card ID)"
   $futbinUrl  = Read-Host "FUTBIN URL"
   $futggUrl   = Read-Host "FUT.GG URL"
   $futwizUrl  = Read-Host "FUTWIZ URL"
@@ -38,7 +39,7 @@ function Add-PlayerInteractive($json) {
 
   $newPlayer = [PSCustomObject]@{
     playerName = $playerName
-    playerId   = $playerId
+    playerId   = $cardId
     urls       = [PSCustomObject]@{
       futbin  = $futbinUrl
       futgg   = $futggUrl
@@ -63,7 +64,7 @@ function Edit-PlayerInteractive($json) {
   Write-Host "Editing $($p.playerName) - press Enter to keep the current value" -ForegroundColor Cyan
 
   $v = Read-Host "Player name [$($p.playerName)]";      if ($v) { $p.playerName = $v }
-  $v = Read-Host "Player ID [$($p.playerId)]";           if ($v) { $p.playerId = $v }
+  $v = Read-Host "Player ID [$($p.cardId)]";           if ($v) { $p.cardId = $v }
   $v = Read-Host "FUTBIN URL [$($p.urls.futbin)]";       if ($v) { $p.urls.futbin = $v }
   $v = Read-Host "FUT.GG URL [$($p.urls.futgg)]";        if ($v) { $p.urls.futgg = $v }
   $v = Read-Host "FUTWIZ URL [$($p.urls.futwiz)]";       if ($v) { $p.urls.futwiz = $v }

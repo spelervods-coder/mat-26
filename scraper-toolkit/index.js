@@ -43,16 +43,28 @@ if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const SCRAPERS = { futbin: futbinScraper, futgg: futggScraper, futwiz: futwizScraper, futnext: futnextScraper };
 
+// Strips a leading UTF-8 BOM if present. PowerShell's `Set-Content
+// -Encoding UTF8` (Windows PowerShell 5.1) always writes a BOM, which
+// breaks JSON.parse with "Unexpected token" - add-player.ps1 and
+// manage-players.ps1 are fixed to not write one, but this is a defensive
+// second layer in case players.json got a BOM some other way.
+function stripBOM(text) {
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
 function loadPlayersConfig() {
   if (!fs.existsSync(PLAYERS_FILE)) {
     console.log(`❌ ${PLAYERS_FILE} not found.`);
     process.exit(1);
   }
-  return JSON.parse(fs.readFileSync(PLAYERS_FILE, 'utf8')).players;
+  const raw = stripBOM(fs.readFileSync(PLAYERS_FILE, 'utf8'));
+  return JSON.parse(raw).players;
 }
 
 function savePlayersConfig(players) {
-  fs.writeFileSync(PLAYERS_FILE, JSON.stringify({ players }, null, 2));
+  // Explicitly UTF-8 without BOM - fs.writeFileSync never adds one, but
+  // stated here so this stays true if the write method ever changes.
+  fs.writeFileSync(PLAYERS_FILE, JSON.stringify({ players }, null, 2), 'utf8');
 }
 
 // Backward compatible: old entries used "playerId" as the (mistaken)
@@ -194,6 +206,16 @@ function storeAndLog(playerDef, merged) {
   logPriceSnapshot(id, playerDef.playerName, merged);
 }
 
+// Shown after every overview so TOS is visible during normal screening
+// (get/refresh/scrape-all), not just at buy-time.
+function printTOS(merged) {
+  if (!merged?.merged) return;
+  const tos = pricingEngine.calculateTOS(merged.merged);
+  const flag = tos.tos >= 7.0 ? '  ✅ boven drempel (7.0)' : '';
+  console.log(`\n🎯 TOS score: ${tos.tos}/10${flag}`);
+  console.log(`   profit ${tos.subScores.profit} · liquidity ${tos.subScores.liquidity} · mean-rev ${tos.subScores.meanReversion} · range ${tos.subScores.range}`);
+}
+
 async function cmdScrapeAll({ withSales = true } = {}) {
   const players = loadPlayersConfig();
   const results = [];
@@ -201,6 +223,7 @@ async function cmdScrapeAll({ withSales = true } = {}) {
   for (const playerDef of players) {
     const merged = await scrapePlayerFull(playerDef, { withSales });
     console.log('\n' + formatOverview(merged));
+    printTOS(merged);
     if (merged) {
       results.push(merged);
       storeAndLog(playerDef, merged);
@@ -221,7 +244,10 @@ async function cmdGet(id, { json }) {
 
   if (entry && !store.isStale(entry, MAX_AGE_MINUTES)) {
     if (json) console.log(JSON.stringify(entry, null, 2));
-    else console.log('\n' + formatOverview(entry) + `\n\n(from cache, stored ${entry.storedAt})`);
+    else {
+      console.log('\n' + formatOverview(entry) + `\n\n(from cache, stored ${entry.storedAt})`);
+      printTOS(entry);
+    }
     return;
   }
 
@@ -267,7 +293,10 @@ async function cmdRefresh(id, { source, json, withSales = true } = {}) {
 
   storeAndLog(playerDef, merged);
   if (json) console.log(JSON.stringify(merged, null, 2));
-  else console.log('\n' + formatOverview(merged));
+  else {
+    console.log('\n' + formatOverview(merged));
+    printTOS(merged);
+  }
 }
 
 const MAX_RELISTS = 3;
@@ -282,6 +311,16 @@ function resolvePositionId(idOrPrefix) {
   const full = positionsStore.getPosition(idOrPrefix);
   if (full) return full;
   return positionsStore.findPositionByPrefix(idOrPrefix);
+}
+
+// Accepts EITHER a specific positionId (explicit control) OR a cardId
+// (auto-resolves via FIFO to the oldest position currently in one of the
+// allowed states for this action - cards of the same cardId are
+// fungible, EA doesn't track which literal instance you act on).
+function resolvePositionForAction(idOrCardId, allowedLastActions) {
+  const explicit = resolvePositionId(idOrCardId);
+  if (explicit) return explicit;
+  return positionsStore.findOldestOpenPositionForCard(idOrCardId, allowedLastActions);
 }
 
 // node index.js buy <cardId> <price>
@@ -319,38 +358,38 @@ async function cmdBuy(cardId, priceStr) {
   console.log(`\nVolgende stap: node index.js list ${shortId(position.positionId)} <prijs>`);
 }
 
-// node index.js list <positionId> <price>
-async function cmdList(idOrPrefix, priceStr) {
+// node index.js list <positionId|cardId> <price>
+async function cmdList(idOrCardId, priceStr) {
   const price = parseInt(priceStr, 10);
-  const pos = resolvePositionId(idOrPrefix);
-  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+  const pos = resolvePositionForAction(idOrCardId, ['buy']);
+  if (!pos) { console.log(`❌ Geen open (net-gekochte) positie gevonden voor "${idOrCardId}"`); process.exit(1); }
 
   positionsStore.addEvent(pos.positionId, { action: 'list', price, listDurationMin: 60 });
-  console.log(`✅ LIST gelogd: ${pos.playerName} voor ${price} (60 min)`);
-  console.log(`Volgende stap: node index.js sold ${shortId(pos.positionId)} <prijs>  of  node index.js expired ${shortId(pos.positionId)}`);
+  console.log(`✅ LIST gelogd: ${pos.playerName} voor ${price} (60 min)  [${shortId(pos.positionId)}]`);
+  console.log(`Volgende stap: node index.js sold ${pos.cardId} <prijs>  of  node index.js expired ${pos.cardId}`);
 }
 
-// node index.js sold <positionId> <price>
-async function cmdSold(idOrPrefix, priceStr) {
+// node index.js sold <positionId|cardId> <price>
+async function cmdSold(idOrCardId, priceStr) {
   const price = parseInt(priceStr, 10);
-  const pos = resolvePositionId(idOrPrefix);
-  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+  const pos = resolvePositionForAction(idOrCardId, ['list', 'relist']);
+  if (!pos) { console.log(`❌ Geen open (gelistte) positie gevonden voor "${idOrCardId}"`); process.exit(1); }
 
   const netPrice = Math.round(price * (1 - pricingEngine.EA_TAX));
   const updated = positionsStore.addEvent(pos.positionId, { action: 'sold', price, netPrice });
-  console.log(`✅ SOLD gelogd: ${updated.playerName} voor ${price} (netto ${netPrice})`);
+  console.log(`✅ SOLD gelogd: ${updated.playerName} voor ${price} (netto ${netPrice})  [${shortId(pos.positionId)}]`);
   console.log(`💰 Winst: ${updated.finalProfit >= 0 ? '+' : ''}${updated.finalProfit}`);
 }
 
-// node index.js expired <positionId>
+// node index.js expired <positionId|cardId>
 // Logs the expiry, checks relist count vs max, then re-scrapes fresh
 // data and recommends a NEW relist price (not a fixed decrement).
-async function cmdExpired(idOrPrefix) {
-  const pos = resolvePositionId(idOrPrefix);
-  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+async function cmdExpired(idOrCardId) {
+  const pos = resolvePositionForAction(idOrCardId, ['list', 'relist']);
+  if (!pos) { console.log(`❌ Geen open (gelistte) positie gevonden voor "${idOrCardId}"`); process.exit(1); }
 
   const updated = positionsStore.addEvent(pos.positionId, { action: 'expire' });
-  console.log(`⏰ EXPIRE gelogd: ${updated.playerName}`);
+  console.log(`⏰ EXPIRE gelogd: ${updated.playerName}  [${shortId(pos.positionId)}]`);
   console.log(`   Let op: EA plaatst dit NIET automatisch terug in je club - blijft een slot bezetten tot je 'm ophaalt.`);
 
   if (updated.relistCount >= MAX_RELISTS) {
@@ -378,19 +417,19 @@ async function cmdExpired(idOrPrefix) {
 
   if (rec) {
     console.log(`\n💡 Nieuwe relist-prijs: ${rec.sellPrice} (was ${lastListEvent.price}${rec.wasCapped ? ', afgetopt op max 15% stap' : ''})`);
-    console.log(`Volgende stap: node index.js relist ${shortId(pos.positionId)} ${rec.sellPrice}`);
+    console.log(`Volgende stap: node index.js relist ${updated.cardId} ${rec.sellPrice}`);
   }
 }
 
-// node index.js relist <positionId> <price>
-async function cmdRelist(idOrPrefix, priceStr) {
+// node index.js relist <positionId|cardId> <price>
+async function cmdRelist(idOrCardId, priceStr) {
   const price = parseInt(priceStr, 10);
-  const pos = resolvePositionId(idOrPrefix);
-  if (!pos) { console.log(`❌ position ${idOrPrefix} niet gevonden`); process.exit(1); }
+  const pos = resolvePositionForAction(idOrCardId, ['expire']);
+  if (!pos) { console.log(`❌ Geen open (verlopen) positie gevonden voor "${idOrCardId}"`); process.exit(1); }
 
   const updated = positionsStore.addEvent(pos.positionId, { action: 'relist', price, listDurationMin: 60 });
-  console.log(`✅ RELIST #${updated.relistCount} gelogd: ${updated.playerName} voor ${price}`);
-  console.log(`Volgende stap: node index.js sold ${shortId(pos.positionId)} <prijs>  of  node index.js expired ${shortId(pos.positionId)}`);
+  console.log(`✅ RELIST #${updated.relistCount} gelogd: ${updated.playerName} voor ${price}  [${shortId(pos.positionId)}]`);
+  console.log(`Volgende stap: node index.js sold ${updated.cardId} <prijs>  of  node index.js expired ${updated.cardId}`);
 }
 
 // node index.js positions - dashboard
@@ -422,6 +461,39 @@ async function cmdPositionsDashboard() {
   if (stuck.length) {
     console.log(`⚠️  Stuck posities: ${stuck.length} — review nodig`);
   }
+}
+
+// node index.js scores
+// Screening tool: ranks every player in players.json by cached TOS score
+// so you can quickly see who to keep/swap while building a watchlist.
+// Uses whatever is in players-db.json - run `node index.js` first to
+// refresh everything, or `refresh <cardId>` per candidate.
+async function cmdListScores() {
+  const players = loadPlayersConfig();
+  const rows = players.map(p => {
+    const id = getEntryId(p);
+    const cached = id ? store.getEntry(id) : null;
+    const tos = cached?.merged ? pricingEngine.calculateTOS(cached.merged) : null;
+    return {
+      playerName: p.playerName,
+      cardId: id,
+      tos: tos?.tos ?? null,
+      cardVersion: cached?.cardVersion ?? null,
+    };
+  });
+
+  rows.sort((a, b) => (b.tos ?? -1) - (a.tos ?? -1));
+
+  console.log('\n━━━ Score-overzicht (players.json, laatste cache) ━━━\n');
+  rows.forEach(r => {
+    const scoreStr = r.tos !== null ? r.tos.toFixed(1) : ' — ';
+    const flag = r.tos !== null && r.tos >= 7.0 ? '✅' : '  ';
+    console.log(`${flag} ${String(scoreStr).padStart(5)}  ${r.playerName}${r.cardVersion ? ' (' + r.cardVersion + ')' : ''}  [${r.cardId ?? '?'}]`);
+  });
+
+  const above = rows.filter(r => r.tos !== null && r.tos >= 7.0).length;
+  const missing = rows.filter(r => r.tos === null).length;
+  console.log(`\n${above}/${rows.length} spelers >= TOS 7.0${missing ? `  (${missing} nog geen data — run eerst: node index.js)` : ''}`);
 }
 
 function parseArgs(argv) {
@@ -471,6 +543,8 @@ function parseArgs(argv) {
     await cmdRelist(positional[0], positional[1]);
   } else if (cmd === 'positions') {
     await cmdPositionsDashboard();
+  } else if (cmd === 'scores') {
+    await cmdListScores();
   } else {
     console.log('Usage:');
     console.log('  node index.js [--prices-only]                 scrape all players.json entries');
@@ -479,13 +553,16 @@ function parseArgs(argv) {
     console.log('  node index.js refresh <cardId> [--json]       force full refresh (all 4 sources + sales history)');
     console.log('  node index.js refresh <cardId> --prices-only   force refresh, skip sales history (faster)');
     console.log('  node index.js refresh <cardId> --source=futbin   refresh only 1 source, keep rest cached');
+    console.log('  node index.js scores                           ranglijst: alle players.json op TOS-score');
     console.log('');
     console.log('  --- transactie-logging (human-in-the-loop) ---');
+    console.log('  <positionId> mag ook <cardId> zijn - dan wordt automatisch de oudste');
+    console.log('  passende positie gekozen (FIFO, kaarten van hetzelfde type zijn fungibel)');
     console.log('  node index.js buy <cardId> <price>             log aankoop, krijg aanbevolen verkoopprijs');
-    console.log('  node index.js list <positionId> <price>        log dat je gelist hebt');
-    console.log('  node index.js sold <positionId> <price>        log verkoop, sluit positie, toont winst');
-    console.log('  node index.js expired <positionId>              log niet-verkocht, krijg verse relist-prijs');
-    console.log('  node index.js relist <positionId> <price>      log relist');
+    console.log('  node index.js list <cardId|positionId> <price>        log dat je gelist hebt');
+    console.log('  node index.js sold <cardId|positionId> <price>        log verkoop, sluit positie, toont winst');
+    console.log('  node index.js expired <cardId|positionId>              log niet-verkocht, krijg verse relist-prijs');
+    console.log('  node index.js relist <cardId|positionId> <price>      log relist');
     console.log('  node index.js positions                        dashboard: alle open posities + slot-telling');
   }
 
